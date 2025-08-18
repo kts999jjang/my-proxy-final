@@ -2,87 +2,72 @@
 
 const fetch = require('node-fetch');
 
-// 상수와 테마 정의
-const kTickerInfo = {
-  'NVDA': { name: 'NVIDIA', keywords: ['nvidia', 'gpu', 'geforce'] },
-  'MSFT': { name: 'Microsoft', keywords: ['microsoft', 'azure', 'windows'] },
-  'AVGO': { name: 'Broadcom', keywords: ['broadcom', 'avgo'] },
-  'AMD':  { name: 'AMD', keywords: ['amd', 'ryzen', 'epyc'] },
-  'QCOM': { name: 'Qualcomm', keywords: ['qualcomm', 'snapdragon'] },
-  'SMCI': { name: 'Super Micro Computer', keywords: ['smci', 'supermicro'] },
-  'AMZN': { name: 'Amazon', keywords: ['amazon', 'aws'] },
-  'GOOGL':{'name': 'Google', keywords: ['google', 'alphabet', 'android'] },
-  'CRM':  { name: 'Salesforce', keywords: ['salesforce', 'crm'] },
-  'ADBE': { name: 'Adobe', keywords: ['adobe', 'photoshop'] },
-  'SNOW': {'name': 'Snowflake', keywords: ['snowflake', 'snow'] },
-  'TSLA': {'name': 'Tesla', keywords: ['tesla', 'elon musk'] },
-  'RIVN': {'name': 'Rivian', keywords: ['rivian'] },
-  'LCID': {'name': 'Lucid', keywords: ['lucid'] },
-  'PLUG': {'name': 'Plug Power', keywords: ['plug power', 'hydrogen'] },
-  'CRWD': {'name': 'CrowdStrike', keywords: ['crowdstrike', 'cybersecurity'] },
-  'PANW': {'name': 'Palo Alto Networks', keywords: ['palo alto networks'] },
-  'ZS':   {'name': 'Zscaler', keywords: ['zscaler'] },
-  'NFLX': {'name': 'Netflix', keywords: ['netflix', 'streaming'] },
-  'DIS':  {'name': 'Disney', keywords: ['disney'] },
-  'ROKU': {'name': 'Roku', keywords: ['roku'] },
-  'PARA': {'name': 'Paramount', keywords: ['paramount'] },
-  'PFE':  {'name': 'Pfizer', keywords: ['pfizer'] },
-  'JNJ':  {'name': 'Johnson & Johnson', keywords: ['johnson & johnson'] },
-  'MRNA': {'name': 'Moderna', keywords: ['moderna', 'vaccine'] },
-  'BNTX': {'name': 'BioNTech', keywords: ['biontech'] },
-};
+// ... (기존 kTickerInfo, kInvestmentThemes 상수는 동일) ...
+const kTickerInfo = { /* 이전과 동일 */ };
+const kInvestmentThemes = { /* 이전과 동일 */ };
 
-const kInvestmentThemes = {
-  'AI & 반도체': {
-    'keywords': ['ai', 'gpu', 'nvidia', 'amd', 'intel', 'semiconductor', 'chip', 'data center', 'machine learning', 'arm'],
-    'tickers': { 'leading': ['NVDA', 'MSFT', 'AVGO'], 'growth': ['AMD', 'QCOM', 'SMCI'], }
-  },
-  '클라우드 & SaaS': {
-    'keywords': ['cloud', 'saas', 'software', 'crm', 'adobe', 'oracle', 'salesforce', 'aws', 'azure', 'snow'],
-    'tickers': { 'leading': ['MSFT', 'AMZN', 'GOOGL'], 'growth': ['CRM', 'ADBE', 'SNOW'], }
-  },
-  '전기차 & 자율주행': {
-    'keywords': ['ev', 'electric vehicle', 'tesla', 'battery', 'self-driving', 'lidar', 'charging', 'rivian', 'lucid'],
-    'tickers': { 'leading': ['TSLA', 'RIVN'], 'growth': ['LCID', 'PLUG'], }
-  },
-  '사이버 보안': {
-    'keywords': ['cybersecurity', 'security', 'firewall', 'antivirus', 'crowdstrike'],
-    'tickers': { 'leading': ['PANW'], 'growth': ['CRWD', 'ZS'], }
-  },
-  '스트리밍 & 미디어': {
-    'keywords': ['streaming', 'netflix', 'disney', 'video', 'content'],
-    'tickers': { 'leading': ['NFLX', 'DIS'], 'growth': ['ROKU', 'PARA'], }
-  },
-  '헬스케어 & 백신': {
-    'keywords': ['healthcare', 'pharma', 'vaccine', 'pfizer', 'moderna', 'biotech'],
-    'tickers': { 'leading': ['PFE', 'JNJ'], 'growth': ['MRNA', 'BNTX'], }
-  }
-};
 
 // --- API 호출 함수들 ---
-async function fetchNews(analysisDays) {
+
+// 1. NewsAPI 호출 함수 (기존 함수 약간 수정)
+async function fetchFromNewsAPI(analysisDays) {
   const apiKey = process.env.NEWS_API_KEY;
   if (!apiKey) throw new Error('NEWS_API_KEY is not set.');
+  
   const fromDate = new Date(Date.now() - analysisDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const url = `https://newsapi.org/v2/everything?q=tech OR finance&from=${fromDate}&sortBy=popularity&language=en&pageSize=100&apiKey=${apiKey}`;
+  
   const response = await fetch(url);
-  if (!response.ok) throw new Error('Failed to load news');
+  if (!response.ok) throw new Error('Failed to load news from NewsAPI');
+  
   const data = await response.json();
+  // ✨ 중요: 데이터 형식을 { title: ... } 로 통일합니다.
   return data.articles.map(article => ({ title: article.title || '' }));
 }
 
-async function fetchStockDataFromYahoo(tickers) {
-  if (!tickers || tickers.length === 0) return [];
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${tickers.join(',')}?range=1mo&interval=1d`;
-  const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }});
-  if (!response.ok) throw new Error('Failed to fetch from Yahoo Finance');
+// 2. GNews 호출 함수 (새로 추가)
+async function fetchFromGNews(analysisDays) {
+  const apiKey = process.env.GNEWS_API_KEY; // GNews용 환경 변수
+  if (!apiKey) throw new Error('GNEWS_API_KEY is not set.');
+
+  // GNews는 기간을 직접 지정하지 않고, '지난 14일' 같은 표현을 지원하지 않으므로, 키워드 중심으로 검색
+  const url = `https://gnews.io/api/v4/search?q=technology OR finance&lang=en&max=100&apikey=${apiKey}`;
+  
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('Failed to load news from GNews');
+
   const data = await response.json();
-  return data.chart.result || [];
+  // ✨ 중요: 데이터 형식을 { title: ... } 로 통일합니다.
+  return data.articles.map(article => ({ title: article.title || '' }));
+}
+
+// 3. 여러 소스를 순차적으로 호출하는 메인 함수 (새로 추가)
+async function fetchNewsFromMultipleSources(analysisDays) {
+  try {
+    console.log('Attempting to fetch from NewsAPI...');
+    const articles = await fetchFromNewsAPI(analysisDays);
+    console.log('Successfully fetched from NewsAPI.');
+    return articles;
+  } catch (error) {
+    console.warn('Failed to fetch from NewsAPI, trying GNews...', error.message);
+    try {
+      const articles = await fetchFromGNews(analysisDays);
+      console.log('Successfully fetched from GNews as a fallback.');
+      return articles;
+    } catch (fallbackError) {
+      console.error('Failed to fetch from all news sources.', fallbackError.message);
+      throw new Error('All news sources are currently unavailable.');
+    }
+  }
+}
+
+async function fetchStockDataFromYahoo(tickers) {
+  // ... (이전과 동일) ...
 }
 
 // --- 메인 핸들러 ---
 module.exports = async (request, response) => {
-  // CORS 헤더 설정
+  // CORS 헤더 설정 (이전과 동일)
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -92,8 +77,11 @@ module.exports = async (request, response) => {
 
   try {
     const { analysisDays = '14', style = 'leading' } = request.query;
-    const articles = await fetchNews(parseInt(analysisDays));
     
+    // 4. 메인 핸들러에서 새로운 함수를 호출하도록 수정
+    const articles = await fetchNewsFromMultipleSources(parseInt(analysisDays));
+    
+    // ... (이하 로직은 이전과 동일) ...
     const themeScores = {};
     for (const themeName in kInvestmentThemes) {
       const themeKeywords = kInvestmentThemes[themeName].keywords;
