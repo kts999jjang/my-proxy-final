@@ -90,7 +90,17 @@ module.exports = async (request, response) => {
         return score + themeKeywords.filter(kw => title.includes(kw)).length;
       }, 0);
     }
-    const trendingThemeName = Object.entries(themeScores).sort((a, b) => b[1] - a[1])[0][0];
+    
+    const sortedThemes = Object.entries(themeScores).sort((a, b) => b[1] - a[1]);
+
+    if (sortedThemes.length === 0 || sortedThemes[0][1] === 0) {
+      // 일치하는 뉴스가 하나도 없을 경우, 분석 실패 응답
+      // 404 Not Found 에러를 반환하여 클라이언트가 처리하도록 함
+      return response.status(404).json({ 
+        error: 'Failed to process request', 
+        details: 'Could not determine a trending theme from the provided news articles.' 
+      });
+    }
     
     const themeTickers = kInvestmentThemes[trendingThemeName].tickers[style];
     const stockDataResults = await fetchStockDataFromYahoo(themeTickers);
