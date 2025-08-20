@@ -2,6 +2,7 @@
   "name": "my-proxy-final",
   "version": "1.0.0",
   "dependencies": {
-    "node-fetch": "^2.6.7"
+    "node-fetch": "^2.6.7",
+    "compromise": "^14.13.0"
   }
 }
