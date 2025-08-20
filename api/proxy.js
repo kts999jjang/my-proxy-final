@@ -3,7 +3,6 @@
 const fetch = require('node-fetch');
 
 // --- 상수 정의 ---
-
 const kInvestmentThemes = {
   '인공지능(AI)': {
     query: '"artificial intelligence" OR "AI" OR "machine learning" OR nvidia OR openai',
@@ -51,7 +50,6 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
   const gnewsApiKey = process.env.GNEWS_API_KEY;
 
   try {
-    // NewsAPI 먼저 시도
     if (!newsApiKey) throw new Error('NEWS_API_KEY is not set.');
     const url = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=en&pageSize=100&apiKey=${newsApiKey}`;
     const response = await fetch(url);
@@ -64,7 +62,6 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
     };
   } catch (error) {
     console.warn(`NewsAPI failed for theme "${themeName}", trying GNews. Reason: ${error.message}`);
-    // GNews로 폴백
     if (!gnewsApiKey) throw new Error('GNEWS_API_KEY is not set.');
     const url = `https://gnews.io/api/v4/search?q=(${themeQuery})&lang=en&max=100&apikey=${gnewsApiKey}`;
     const response = await fetch(url);
@@ -78,22 +75,28 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
   }
 }
 
-// ✨ Yahoo Finance 오류 로깅이 강화된 함수
+// ✨ 여러 종목 중 하나가 실패해도 나머지는 성공하도록 수정한 함수
 async function fetchStockDataFromYahoo(tickers) {
   if (!tickers || tickers.length === 0) return [];
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${tickers.join(',')}?range=1mo&interval=1d`;
-  const response = await fetch(url);
-  
-  if (!response.ok) {
-    // 오류 발생 시, Yahoo Finance가 보낸 실제 오류 메시지를 로그에 남깁니다.
-    const errorBody = await response.text();
-    console.error(`Yahoo Finance API Error: Status ${response.status}`, errorBody);
-    throw new Error(`Failed to fetch from Yahoo Finance with status: ${response.status}`);
-  }
 
-  const data = await response.json();
-  // 데이터가 비어있는 경우를 대비한 방어 코드 추가
-  return data?.chart?.result || [];
+  const requests = tickers.map(async (ticker) => {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=1mo&interval=1d`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(`Failed to fetch data for ticker: ${ticker}, Status: ${response.status}`);
+        return null; // 실패한 경우 null 반환
+      }
+      const data = await response.json();
+      return data?.chart?.result?.[0]; // 각 응답은 result 배열에 하나의 항목만 가짐
+    } catch (error) {
+      console.error(`Error fetching data for ticker: ${ticker}`, error);
+      return null; // 에러 발생 시 null 반환
+    }
+  });
+
+  const results = await Promise.all(requests);
+  return results.filter(Boolean); // null 값을 모두 제거하고 유효한 데이터만 반환
 }
 
 
@@ -116,7 +119,7 @@ module.exports = async (request, response) => {
 
     const topTheme = themeResults.sort((a, b) => b.totalResults - a.totalResults)[0];
     
-    if (!topTheme || topTheme.totalResults < 5) { // 최소 5개 이상일 때만 유효한 트렌드로 간주
+    if (!topTheme || topTheme.totalResults < 5) { 
       return response.status(404).json({
         error: 'Failed to process request',
         details: 'Could not determine a significant trending theme.'
@@ -127,9 +130,17 @@ module.exports = async (request, response) => {
     const allArticles = topTheme.articles;
     const themeTickers = kInvestmentThemes[trendingThemeName].tickers[style];
     const stockDataResults = await fetchStockDataFromYahoo(themeTickers);
+    
+    if (stockDataResults.length === 0) {
+      // 주가 정보를 하나도 가져오지 못한 경우
+      return response.status(404).json({
+          error: 'Failed to process request',
+          details: 'Successfully found a theme, but failed to fetch stock data.'
+      });
+    }
 
     const recommendations = stockDataResults.map(stockData => {
-      if (!stockData || !stockData.meta) return null; // 방어 코드
+      if (!stockData || !stockData.meta) return null;
       
       const ticker = stockData.meta.symbol;
       const timestamps = stockData.timestamp || [];
@@ -147,7 +158,7 @@ module.exports = async (request, response) => {
         trendingTheme: trendingThemeName,
         relevantArticles,
       };
-    }).filter(Boolean); // null 값 제거
+    }).filter(Boolean);
 
     response.status(200).json({
       recommendations,
