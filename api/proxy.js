@@ -4,7 +4,6 @@ const fetch = require('node-fetch');
 
 // --- 상수 정의 ---
 
-// ✨ 1. kInvestmentThemes 객체 구조 변경: 각 테마별 검색 쿼리(query) 추가
 const kInvestmentThemes = {
   '인공지능(AI)': {
     query: '"artificial intelligence" OR "AI" OR "machine learning" OR nvidia OR openai',
@@ -46,7 +45,6 @@ const kTickerInfo = {
 
 // --- API 호출 함수 ---
 
-// ✨ 2. 특정 테마에 대한 뉴스 개수와 기사 목록을 가져오는 함수
 async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
   const fromDate = new Date(Date.now() - analysisDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const newsApiKey = process.env.NEWS_API_KEY;
@@ -80,13 +78,22 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
   }
 }
 
+// ✨ Yahoo Finance 오류 로깅이 강화된 함수
 async function fetchStockDataFromYahoo(tickers) {
   if (!tickers || tickers.length === 0) return [];
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${tickers.join(',')}?range=1mo&interval=1d`;
   const response = await fetch(url);
-  if (!response.ok) throw new Error('Failed to fetch from Yahoo Finance');
+  
+  if (!response.ok) {
+    // 오류 발생 시, Yahoo Finance가 보낸 실제 오류 메시지를 로그에 남깁니다.
+    const errorBody = await response.text();
+    console.error(`Yahoo Finance API Error: Status ${response.status}`, errorBody);
+    throw new Error(`Failed to fetch from Yahoo Finance with status: ${response.status}`);
+  }
+
   const data = await response.json();
-  return data.chart.result || [];
+  // 데이터가 비어있는 경우를 대비한 방어 코드 추가
+  return data?.chart?.result || [];
 }
 
 
@@ -102,13 +109,11 @@ module.exports = async (request, response) => {
   try {
     const { analysisDays = '14', style = 'leading' } = request.query;
 
-    // ✨ 3. 모든 테마에 대해 병렬로 뉴스 데이터 요청
     const themePromises = Object.entries(kInvestmentThemes).map(([themeName, themeData]) =>
       fetchNewsForTheme(themeName, themeData.query, parseInt(analysisDays))
     );
     const themeResults = await Promise.all(themePromises);
 
-    // ✨ 4. 가장 많은 기사 수를 가진 테마를 '오늘의 트렌드'로 선정
     const topTheme = themeResults.sort((a, b) => b.totalResults - a.totalResults)[0];
     
     if (!topTheme || topTheme.totalResults < 5) { // 최소 5개 이상일 때만 유효한 트렌드로 간주
@@ -124,9 +129,11 @@ module.exports = async (request, response) => {
     const stockDataResults = await fetchStockDataFromYahoo(themeTickers);
 
     const recommendations = stockDataResults.map(stockData => {
+      if (!stockData || !stockData.meta) return null; // 방어 코드
+      
       const ticker = stockData.meta.symbol;
       const timestamps = stockData.timestamp || [];
-      const quotes = stockData.indicators.quote[0]?.close || [];
+      const quotes = stockData.indicators?.quote?.[0]?.close || [];
       const chartData = timestamps.map((ts, i) => ({ x: i, y: quotes[i] })).filter(d => d.y != null);
       
       const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
@@ -140,7 +147,7 @@ module.exports = async (request, response) => {
         trendingTheme: trendingThemeName,
         relevantArticles,
       };
-    });
+    }).filter(Boolean); // null 값 제거
 
     response.status(200).json({
       recommendations,
