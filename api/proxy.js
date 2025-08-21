@@ -1,7 +1,8 @@
 // my-proxy-final/api/proxy.js
 
 const fetch = require('node-fetch');
-const nlp = require('compromise'); // NLP 라이브러리 import
+const nlp = require('compromise');
+const { createClient } = require('@vercel/kv');
 
 // --- 상수 정의 ---
 
@@ -20,7 +21,7 @@ const kInvestmentThemes = {
   }
 };
 
-// TickerInfo를 '회사명 -> 티커' 맵핑용으로 확장
+// 회사 이름과 티커를 매칭하기 위한 최소한의 키워드 정보
 const kTickerInfo = {
   'NVDA': { name: 'NVIDIA Corp', keywords: ['nvidia', 'nvidia corp'] },
   'MSFT': { name: 'Microsoft Corp', keywords: ['microsoft', 'microsoft corp'] },
@@ -44,7 +45,7 @@ const kTickerInfo = {
 };
 
 
-// --- API 호출 함수 ---
+// --- API 호출 함수들 ---
 
 async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
   const fromDate = new Date(Date.now() - analysisDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -100,10 +101,41 @@ async function fetchStockDataFromYahoo(tickers) {
   return results.filter(Boolean);
 }
 
+async function getTickerForCompanyName(companyName) {
+  const kv = createClient({
+    url: process.env.KV_URL,
+    token: process.env.KV_REST_API_TOKEN,
+  });
+
+  const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
+  
+  const cachedTicker = await kv.get(cleanedName);
+  if (cachedTicker) {
+    console.log(`[CACHE HIT] Found ticker for "${cleanedName}": ${cachedTicker}`);
+    return cachedTicker;
+  }
+
+  console.log(`[CACHE MISS] Searching ticker for "${cleanedName}" via API...`);
+  const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+  if (!apiKey) throw new Error('ALPHA_VANTAGE_API_KEY is not set.');
+  
+  const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${cleanedName}&apikey=${apiKey}`;
+  const response = await fetch(url);
+  const data = await response.json();
+
+  const bestMatch = data?.bestMatches?.[0];
+  if (bestMatch && parseFloat(bestMatch['9. matchScore']) > 0.7) {
+    const ticker = bestMatch['1. symbol'];
+    await kv.set(cleanedName, ticker, { ex: 60 * 60 * 24 * 7 });
+    return ticker;
+  }
+  
+  return null;
+}
+
 
 // --- 메인 핸들러 ---
 module.exports = async (request, response) => {
-  // CORS 헤더 설정
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -140,16 +172,17 @@ module.exports = async (request, response) => {
       });
     });
 
-    const tickerScores = {};
-    for (const orgName in organizationCounts) {
-      for (const ticker in kTickerInfo) {
-        if (kTickerInfo[ticker].keywords.includes(orgName)) {
-          tickerScores[ticker] = (tickerScores[ticker] || 0) + organizationCounts[orgName];
-          break;
-        }
-      }
-    }
+    const companyPromises = Object.keys(organizationCounts)
+        .map(orgName => getTickerForCompanyName(orgName));
     
+    const resolvedTickers = await Promise.all(companyPromises);
+    const validTickers = resolvedTickers.filter(Boolean);
+
+    const tickerScores = {};
+    validTickers.forEach(ticker => {
+        tickerScores[ticker] = (tickerScores[ticker] || 0) + 1;
+    });
+
     const topTickers = Object.entries(tickerScores)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
@@ -165,22 +198,25 @@ module.exports = async (request, response) => {
     const stockDataResults = await fetchStockDataFromYahoo(topTickers);
 
     const recommendations = stockDataResults.map(stockData => {
-        if (!stockData || !stockData.meta) return null;
-        const ticker = stockData.meta.symbol;
-        const timestamps = stockData.timestamp || [];
-        const quotes = stockData.indicators?.quote?.[0]?.close || [];
-        const chartData = timestamps.map((ts, i) => ({ x: i, y: quotes[i] })).filter(d => d.y != null);
-        const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-        const relevantArticles = allArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
-        return {
-          ticker,
-          companyName: kTickerInfo[ticker]?.name || ticker,
-          latestPrice: chartData.length > 0 ? chartData[chartData.length - 1].y : 0,
-          chartData,
-          trendingTheme: trendingThemeName,
-          relevantArticles,
-        };
-      }).filter(Boolean);
+      if (!stockData || !stockData.meta) return null;
+      const ticker = stockData.meta.symbol;
+      const timestamps = stockData.timestamp || [];
+      const quotes = stockData.indicators?.quote?.[0]?.close || [];
+      const chartData = timestamps.map((ts, i) => ({ x: i, y: quotes[i] })).filter(d => d.y != null);
+      
+      const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
+      const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
+      const relevantArticles = allArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
+      
+      return {
+        ticker,
+        companyName,
+        latestPrice: chartData.length > 0 ? chartData[chartData.length - 1].y : 0,
+        chartData,
+        trendingTheme: trendingThemeName,
+        relevantArticles,
+      };
+    }).filter(Boolean);
 
     response.status(200).json({
       recommendations,
