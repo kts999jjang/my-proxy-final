@@ -2,7 +2,7 @@
 
 const fetch = require('node-fetch');
 const nlp = require('compromise');
-const { Redis } = require('@upstash/redis'); // @vercel/kv 대신 @upstash/redis 직접 사용
+const { Redis } = require('@upstash/redis');
 
 // --- 상수 정의 ---
 
@@ -132,6 +132,49 @@ async function getTickerForCompanyName(companyName) {
   return null;
 }
 
+function calculateSMA(data, period) {
+  if (!data || data.length < period) return [];
+  const result = [];
+  for (let i = 0; i < period - 1; i++) {
+    result.push(null);
+  }
+  for (let i = period - 1; i < data.length; i++) {
+    const sum = data.slice(i - period + 1, i + 1).reduce((acc, val) => acc + val, 0);
+    result.push(sum / period);
+  }
+  return result;
+}
+
+function calculateRSI(data, period = 14) {
+  if (!data || data.length <= period) return null;
+  
+  let gains = [];
+  let losses = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const diff = data[i] - data[i - 1];
+    if (diff >= 0) {
+      gains.push(diff);
+      losses.push(0);
+    } else {
+      gains.push(0);
+      losses.push(-diff);
+    }
+  }
+
+  let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+  for (let i = period; i < gains.length; i++) {
+    avgGain = (avgGain * (period - 1) + gains[i]) / period;
+    avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
 
 // --- 메인 핸들러 ---
 module.exports = async (request, response) => {
@@ -196,12 +239,25 @@ module.exports = async (request, response) => {
 
     const stockDataResults = await fetchStockDataFromYahoo(topTickers);
 
+    if (stockDataResults.length === 0) {
+      return response.status(404).json({
+          error: 'Failed to process request',
+          details: 'Successfully found a theme, but failed to fetch stock data.'
+      });
+    }
+
     const recommendations = stockDataResults.map(stockData => {
       if (!stockData || !stockData.meta) return null;
+      
       const ticker = stockData.meta.symbol;
       const timestamps = stockData.timestamp || [];
-      const quotes = stockData.indicators?.quote?.[0]?.close || [];
-      const chartData = timestamps.map((ts, i) => ({ x: i, y: quotes[i] })).filter(d => d.y != null);
+      const quotes = stockData.indicators?.quote?.[0]?.close?.filter(q => q != null) || [];
+      
+      const sma10 = calculateSMA(quotes, 10);
+      const rsi14 = calculateRSI(quotes, 14);
+      
+      const chartData = quotes.map((q, i) => ({ x: i, y: q }));
+      const smaData = sma10.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
       
       const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
       const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
@@ -210,8 +266,11 @@ module.exports = async (request, response) => {
       return {
         ticker,
         companyName,
-        latestPrice: chartData.length > 0 ? chartData[chartData.length - 1].y : 0,
+        latestPrice: quotes.length > 0 ? quotes[quotes.length - 1] : 0,
         chartData,
+        timestamps,
+        smaData,
+        rsi: rsi14,
         trendingTheme: trendingThemeName,
         relevantArticles,
       };
