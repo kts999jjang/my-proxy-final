@@ -53,24 +53,49 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
 
   try {
     if (!newsApiKey) throw new Error('NEWS_API_KEY is not set.');
-    const url = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=en&pageSize=100&apiKey=${newsApiKey}`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`NewsAPI request failed with status ${response.status}`);
-    const data = await response.json();
+    
+    const enUrl = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=en&pageSize=100&apiKey=${newsApiKey}`;
+    const koUrl = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=ko&pageSize=100&apiKey=${newsApiKey}`;
+    
+    const [enResult, koResult] = await Promise.allSettled([fetch(enUrl), fetch(koUrl)]);
+
+    let totalResults = 0;
+    let articles = [];
+
+    if (enResult.status === 'fulfilled' && enResult.value.ok) {
+        const data = await enResult.value.json();
+        totalResults += data.totalResults || 0;
+        articles.push(...(data.articles || []));
+    } else {
+        console.warn(`NewsAPI(en) request failed for theme "${themeName}"`);
+    }
+
+    if (koResult.status === 'fulfilled' && koResult.value.ok) {
+        const data = await koResult.value.json();
+        totalResults += data.totalResults || 0;
+        articles.push(...(data.articles || []));
+    } else {
+        console.warn(`NewsAPI(ko) request failed for theme "${themeName}"`);
+    }
+
+    if (articles.length === 0) throw new Error('All NewsAPI requests failed.');
+    
     return {
       themeName,
-      totalResults: data.totalResults || 0,
-      articles: data.articles.map(a => ({
+      totalResults,
+      articles: articles.map(a => ({
         title: a.title || '',
         url: a.url,
         source: a.source?.name,
         publishedAt: a.publishedAt,
       })),
     };
+
   } catch (error) {
     console.warn(`NewsAPI failed for theme "${themeName}", trying GNews. Reason: ${error.message}`);
     if (!gnewsApiKey) throw new Error('GNEWS_API_KEY is not set.');
-    const url = `https://gnews.io/api/v4/search?q=(${themeQuery})&lang=en&max=100&apikey=${gnewsApiKey}`;
+    const gnewsQuery = `(${themeQuery})&topic=business,technology,science,health`;
+    const url = `https://gnews.io/api/v4/search?q=${gnewsQuery}&lang=en&max=100&apikey=${gnewsApiKey}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`GNews request failed with status ${response.status}`);
     const data = await response.json();
