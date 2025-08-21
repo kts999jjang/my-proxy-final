@@ -289,11 +289,13 @@ module.exports = async (request, response) => {
       const timestamps = stockData.timestamp || [];
       const quotes = stockData.indicators?.quote?.[0]?.close?.filter(q => q != null) || [];
       
-      const sma10 = calculateSMA(quotes, 10);
+      const smaShort = calculateSMA(quotes, 5);
+      const smaLong = calculateSMA(quotes, 20);
       const rsi14 = calculateRSI(quotes, 14);
       
       const chartData = quotes.map((q, i) => ({ x: i, y: q }));
-      const smaData = sma10.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
+      const smaShortData = smaShort.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
+      const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
       
       const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
       const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
@@ -323,7 +325,8 @@ module.exports = async (request, response) => {
         latestPrice: quotes.length > 0 ? quotes[quotes.length - 1] : 0,
         chartData,
         timestamps,
-        smaData,
+        smaShortData,
+        smaLongData,
         rsi: rsi14,
         trendingTheme: trendingThemeName,
         relevantArticles: allRelatedArticles.slice(0, 5),
