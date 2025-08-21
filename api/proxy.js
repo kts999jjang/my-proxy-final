@@ -102,10 +102,8 @@ async function fetchStockDataFromYahoo(tickers) {
 }
 
 async function getTickerForCompanyName(companyName) {
-  const kv = createClient({
-    url: process.env.KV_URL,
-    token: process.env.KV_REST_API_TOKEN,
-  });
+  const kv = createClient();
+  
 
   const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
   
