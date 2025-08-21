@@ -4,6 +4,6 @@
   "dependencies": {
     "node-fetch": "^2.6.7",
     "compromise": "^14.13.0",
-    "@vercel/kv": "^1.0.1"
+    "@upstash/redis": "^1.31.5"
   }
 }

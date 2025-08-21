@@ -2,7 +2,7 @@
 
 const fetch = require('node-fetch');
 const nlp = require('compromise');
-const { createClient } = require('@vercel/kv');
+const { Redis } = require('@upstash/redis'); // @vercel/kv 대신 @upstash/redis 직접 사용
 
 // --- 상수 정의 ---
 
@@ -21,7 +21,6 @@ const kInvestmentThemes = {
   }
 };
 
-// 회사 이름과 티커를 매칭하기 위한 최소한의 키워드 정보
 const kTickerInfo = {
   'NVDA': { name: 'NVIDIA Corp', keywords: ['nvidia', 'nvidia corp'] },
   'MSFT': { name: 'Microsoft Corp', keywords: ['microsoft', 'microsoft corp'] },
@@ -102,12 +101,14 @@ async function fetchStockDataFromYahoo(tickers) {
 }
 
 async function getTickerForCompanyName(companyName) {
-  const kv = createClient();
-  
+  const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
 
   const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
   
-  const cachedTicker = await kv.get(cleanedName);
+  const cachedTicker = await redis.get(cleanedName);
   if (cachedTicker) {
     console.log(`[CACHE HIT] Found ticker for "${cleanedName}": ${cachedTicker}`);
     return cachedTicker;
@@ -124,7 +125,7 @@ async function getTickerForCompanyName(companyName) {
   const bestMatch = data?.bestMatches?.[0];
   if (bestMatch && parseFloat(bestMatch['9. matchScore']) > 0.7) {
     const ticker = bestMatch['1. symbol'];
-    await kv.set(cleanedName, ticker, { ex: 60 * 60 * 24 * 7 });
+    await redis.set(cleanedName, ticker, { ex: 60 * 60 * 24 * 7 });
     return ticker;
   }
   
