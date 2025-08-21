@@ -22,25 +22,25 @@ const kInvestmentThemes = {
 };
 
 const kTickerInfo = {
-  'NVDA': { name: 'NVIDIA Corp', keywords: ['nvidia', 'nvidia corp'] },
-  'MSFT': { name: 'Microsoft Corp', keywords: ['microsoft', 'microsoft corp'] },
-  'AI': { name: 'C3.ai, Inc.', keywords: ['c3.ai', 'c3 ai'] },
-  'PLTR': { name: 'Palantir Technologies', keywords: ['palantir', 'palantir technologies'] },
-  'AMD': { name: 'Advanced Micro Devices', keywords: ['amd', 'advanced micro devices'] },
-  'META': { name: 'Meta Platforms, Inc.', keywords: ['meta', 'meta platforms', 'facebook'] },
-  'AAPL': { name: 'Apple Inc.', keywords: ['apple', 'apple inc'] },
-  'RBLX': { name: 'Roblox Corporation', keywords: ['roblox'] },
-  'U': { name: 'Unity Software Inc.', keywords: ['unity', 'unity software'] },
-  'SNAP': { name: 'Snap Inc.', keywords: ['snap inc', 'snapchat'] },
-  'TSLA': { name: 'Tesla, Inc.', keywords: ['tesla'] },
-  'RIVN': { name: 'Rivian Automotive, Inc.', keywords: ['rivian'] },
-  'LCID': { name: 'Lucid Group, Inc.', keywords: ['lucid'] },
-  'GM': { name: 'General Motors Company', keywords: ['gm', 'general motors'] },
-  'F': { name: 'Ford Motor Company', keywords: ['ford'] },
-  'AMZN': { name: 'Amazon.com, Inc.', keywords: ['amazon', 'amazon.com'] },
-  'GOOGL': { name: 'Alphabet Inc.', keywords: ['alphabet', 'google'] },
-  'SNOW': { name: 'Snowflake Inc.', keywords: ['snowflake'] },
-  'CRWD': { name: 'CrowdStrike Holdings', keywords: ['crowdstrike'] }
+  'NVDA': { name: 'NVIDIA Corp', keywords: ['nvidia', 'nvidia corp'], style: 'leading' },
+  'MSFT': { name: 'Microsoft Corp', keywords: ['microsoft', 'microsoft corp'], style: 'leading' },
+  'AI': { name: 'C3.ai, Inc.', keywords: ['c3.ai', 'c3 ai'], style: 'growth' },
+  'PLTR': { name: 'Palantir Technologies', keywords: ['palantir', 'palantir technologies'], style: 'growth' },
+  'AMD': { name: 'Advanced Micro Devices', keywords: ['amd', 'advanced micro devices'], style: 'growth' },
+  'META': { name: 'Meta Platforms, Inc.', keywords: ['meta', 'meta platforms', 'facebook'], style: 'leading' },
+  'AAPL': { name: 'Apple Inc.', keywords: ['apple', 'apple inc'], style: 'leading' },
+  'RBLX': { name: 'Roblox Corporation', keywords: ['roblox'], style: 'growth' },
+  'U': { name: 'Unity Software Inc.', keywords: ['unity', 'unity software'], style: 'growth' },
+  'SNAP': { name: 'Snap Inc.', keywords: ['snap inc', 'snapchat'], style: 'growth' },
+  'TSLA': { name: 'Tesla, Inc.', keywords: ['tesla'], style: 'leading' },
+  'RIVN': { name: 'Rivian Automotive, Inc.', keywords: ['rivian', 'r1t', 'electric truck'], style: 'growth' },
+  'LCID': { name: 'Lucid Group, Inc.', keywords: ['lucid', 'air', 'ev'], style: 'growth' },
+  'GM': { name: 'General Motors Company', keywords: ['gm', 'general motors'], style: 'leading' },
+  'F': { name: 'Ford Motor Company', keywords: ['ford'], style: 'leading' },
+  'AMZN': { name: 'Amazon.com, Inc.', keywords: ['amazon', 'amazon.com'], style: 'leading' },
+  'GOOGL': { name: 'Alphabet Inc.', keywords: ['alphabet', 'google'], style: 'leading' },
+  'SNOW': { name: 'Snowflake Inc.', keywords: ['snowflake', 'data cloud'], style: 'growth' },
+  'CRWD': { name: 'CrowdStrike Holdings', keywords: ['crowdstrike', 'cybersecurity'], style: 'growth' }
 };
 
 
@@ -60,7 +60,12 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
     return {
       themeName,
       totalResults: data.totalResults || 0,
-      articles: data.articles.map(a => ({ title: a.title || '' })),
+      articles: data.articles.map(a => ({
+        title: a.title || '',
+        url: a.url,
+        source: a.source?.name,
+        publishedAt: a.publishedAt,
+      })),
     };
   } catch (error) {
     console.warn(`NewsAPI failed for theme "${themeName}", trying GNews. Reason: ${error.message}`);
@@ -72,7 +77,12 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
     return {
       themeName,
       totalResults: data.totalArticles || 0,
-      articles: data.articles.map(a => ({ title: a.title || '' })),
+      articles: data.articles.map(a => ({
+        title: a.title || '',
+        url: a.url,
+        source: a.source?.name,
+        publishedAt: a.publishedAt,
+      })),
     };
   }
 }
@@ -186,7 +196,7 @@ module.exports = async (request, response) => {
   }
 
   try {
-    const { analysisDays = '14' } = request.query;
+    const { analysisDays = '14', style = 'leading' } = request.query;
 
     const themePromises = Object.entries(kInvestmentThemes).map(([themeName, themeData]) =>
       fetchNewsForTheme(themeName, themeData.query, parseInt(analysisDays))
@@ -227,13 +237,14 @@ module.exports = async (request, response) => {
 
     const topTickers = Object.entries(tickerScores)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(entry => entry[0]);
+      .map(entry => entry[0])
+      .filter(ticker => kTickerInfo[ticker]?.style === style)
+      .slice(0, 3);
 
     if (topTickers.length === 0) {
         return response.status(404).json({
             error: 'Failed to process request',
-            details: 'Could not discover any stocks from news articles.'
+            details: `Could not discover any stocks for the selected style (${style}).`
         });
     }
 
@@ -261,7 +272,25 @@ module.exports = async (request, response) => {
       
       const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
       const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-      const relevantArticles = allArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
+      const allRelatedArticles = allArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw)));
+      
+      const dailyCounts = {};
+      allRelatedArticles.forEach(article => {
+        if (!article.publishedAt) return;
+        const date = new Date(article.publishedAt).toISOString().split('T')[0];
+        dailyCounts[date] = (dailyCounts[date] || 0) + 1;
+      });
+
+      const wordCounts = {};
+      const stopWords = ['a', 'an', 'the', 'in', 'on', 'for', 'with', 'of', 'to', 'is', 'and', 'or', ...searchKeywords];
+      allRelatedArticles.forEach(article => {
+        const words = article.title.toLowerCase().replace(/'s/g, '').replace(/[^a-z0-9\s]/g, '').split(/\s+/);
+        words.forEach(word => {
+          if (word.length > 2 && !stopWords.includes(word) && isNaN(word)) {
+            wordCounts[word] = (wordCounts[word] || 0) + 1;
+          }
+        });
+      });
       
       return {
         ticker,
@@ -272,7 +301,9 @@ module.exports = async (request, response) => {
         smaData,
         rsi: rsi14,
         trendingTheme: trendingThemeName,
-        relevantArticles,
+        relevantArticles: allRelatedArticles.slice(0, 5),
+        dailyNewsStats: dailyCounts,
+        topKeywords: Object.entries(wordCounts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(e=>e[0]),
       };
     }).filter(Boolean);
 
