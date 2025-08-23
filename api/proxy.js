@@ -50,40 +50,58 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
   const fromDate = new Date(Date.now() - analysisDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const newsApiKey = process.env.NEWS_API_KEY;
   const gnewsApiKey = process.env.GNEWS_API_KEY;
+  const maxArticlesToFetch = 500;
+  const pageSize = 100;
 
   try {
     if (!newsApiKey) throw new Error('NEWS_API_KEY is not set.');
     
-    const enUrl = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=en&pageSize=100&apiKey=${newsApiKey}`;
-    const koUrl = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=ko&pageSize=100&apiKey=${newsApiKey}`;
-    
-    const [enResult, koResult] = await Promise.allSettled([fetch(enUrl), fetch(koUrl)]);
+    const fetchLanguage = async (lang) => {
+      let allArticles = [];
+      let totalResults = 0;
+      let page = 1;
+      
+      while (allArticles.length < maxArticlesToFetch) {
+        const url = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=${lang}&pageSize=${pageSize}&page=${page}&apiKey=${newsApiKey}`;
+        const response = await fetch(url);
+        if (!response.ok) {
+           if (response.status === 426) {
+               console.warn(`NewsAPI(${lang}) upgrade required to access more pages. Stopping at page ${page-1}.`);
+               break; 
+           }
+           throw new Error(`NewsAPI(${lang}) request failed at page ${page} with status ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (page === 1) {
+            totalResults = data.totalResults || 0;
+        }
 
-    let totalResults = 0;
-    let articles = [];
+        const fetchedArticles = data.articles || [];
+        if (fetchedArticles.length === 0) {
+            break;
+        }
+        allArticles.push(...fetchedArticles);
+        
+        if (allArticles.length >= totalResults || allArticles.length >= maxArticlesToFetch) {
+            break;
+        }
+        page++;
+      }
+      return { articles: allArticles, totalResults };
+    };
 
-    if (enResult.status === 'fulfilled' && enResult.value.ok) {
-        const data = await enResult.value.json();
-        totalResults += data.totalResults || 0;
-        articles.push(...(data.articles || []));
-    } else {
-        console.warn(`NewsAPI(en) request failed for theme "${themeName}"`);
-    }
+    const [enResult, koResult] = await Promise.all([fetchLanguage('en'), fetchLanguage('ko')]);
 
-    if (koResult.status === 'fulfilled' && koResult.value.ok) {
-        const data = await koResult.value.json();
-        totalResults += data.totalResults || 0;
-        articles.push(...(data.articles || []));
-    } else {
-        console.warn(`NewsAPI(ko) request failed for theme "${themeName}"`);
-    }
+    const combinedArticles = [...enResult.articles, ...koResult.articles];
+    const combinedTotalResults = enResult.totalResults + koResult.totalResults;
 
-    if (articles.length === 0) throw new Error('All NewsAPI requests failed.');
+    if (combinedArticles.length === 0) throw new Error('All NewsAPI requests failed to return articles.');
     
     return {
       themeName,
-      totalResults,
-      articles: articles.map(a => ({
+      totalResults: combinedTotalResults,
+      articles: combinedArticles.map(a => ({
         title: a.title || '',
         url: a.url,
         source: a.source?.name,
@@ -92,7 +110,7 @@ async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
     };
 
   } catch (error) {
-    console.warn(`NewsAPI failed for theme "${themeName}", trying GNews. Reason: ${error.message}`);
+    console.warn(`NewsAPI process failed for theme "${themeName}", trying GNews. Reason: ${error.message}`);
     if (!gnewsApiKey) throw new Error('GNEWS_API_KEY is not set.');
     const gnewsQuery = `(${themeQuery})&topic=business,technology,science,health`;
     const url = `https://gnews.io/api/v4/search?q=${gnewsQuery}&lang=en&max=100&apikey=${gnewsApiKey}`;
