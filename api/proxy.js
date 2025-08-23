@@ -7,21 +7,6 @@ import { Redis } from '@upstash/redis';
 import nlp from 'compromise';
 
 // --- 상수 정의 ---
-const kInvestmentThemes = {
-  '인공지능(AI)': {
-    query: 'The future of artificial intelligence, semiconductor chips, and machine learning models.',
-  },
-  '메타버스 & VR': {
-    query: 'Trends in metaverse platforms, virtual reality headsets, and augmented reality applications.',
-  },
-  '전기차 & 자율주행': {
-    query: 'The market for electric vehicles, self-driving car technology, and battery innovation.',
-  },
-  '클라우드 컴퓨팅': {
-    query: 'Growth in cloud computing, data centers, and enterprise software as a service (SaaS).',
-  }
-};
-
 const kTickerInfo = {
   'NVDA': { name: 'NVIDIA Corp', keywords: ['nvidia', 'nvidia corp'], style: 'leading' },
   'MSFT': { name: 'Microsoft Corp', keywords: ['microsoft', 'microsoft corp'], style: 'leading' },
@@ -43,7 +28,6 @@ const kTickerInfo = {
   'SNOW': { name: 'Snowflake Inc.', keywords: ['snowflake', 'data cloud'], style: 'growth' },
   'CRWD': { name: 'CrowdStrike Holdings', keywords: ['crowdstrike', 'cybersecurity'], style: 'growth' }
 };
-
 
 // --- API 호출 및 계산 함수들 ---
 
@@ -151,58 +135,63 @@ export default async function handler(request, response) {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const index = pinecone.index('news-index');
 
-    // 1. 모든 테마에 대해 동시 분석 실행
-    const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
-      // 각 테마의 쿼리 문장을 벡터로 변환
-      const embeddingResponse = await openai.embeddings.create({
-        model: 'text-embedding-3-small',
-        input: [themeData.query],
-      });
-      const queryVector = embeddingResponse.data[0].embedding;
-      
-      // Pinecone에서 유사 뉴스 검색
-      const queryResult = await index.query({
-        topK: 100, // 각 테마별로 가장 관련성 높은 뉴스 100개 검색
-        vector: queryVector,
-        includeMetadata: true,
-      });
-      const similarArticles = queryResult.matches.map(match => match.metadata);
+    // 1. 최신 뉴스 10개로 '오늘의 시장 핵심 문장' 생성
+    const gnewsUrl = `https://gnews.io/api/v4/search?q=market trends&topic=business,technology&lang=en&max=10&apikey=${process.env.GNEWS_API_KEY}`;
+    const latestNewsResponse = await fetch(gnewsUrl);
+    const latestNews = await latestNewsResponse.json();
+    if (!latestNews.articles || latestNews.articles.length === 0) {
+        throw new Error('Could not fetch latest news to generate theme.');
+    }
+    const headlines = latestNews.articles.map(a => a.title).join('\n');
 
-      // NLP로 종목 발굴
-      const organizationCounts = {};
-      similarArticles.forEach(article => {
-        const doc = nlp(article.title);
-        const organizations = doc.organizations().out('array');
-        organizations.forEach(org => {
-          const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-          organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
-        });
+    const chatResponse = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{
+        role: 'user',
+        content: `Summarize the key market theme from these headlines in one objective Korean sentence focusing on business or technology trends:\n\n${headlines}`
+      }],
+    });
+    const themeSentence = chatResponse.choices[0].message.content;
+
+    // 2. 핵심 문장을 벡터로 변환하여 Pinecone에서 유사 뉴스 검색
+    const embeddingResponse = await openai.embeddings.create({
+      model: 'text-embedding-3-small',
+      input: [themeSentence],
+    });
+    const queryVector = embeddingResponse.data[0].embedding;
+    
+    const queryResult = await index.query({
+      topK: 200, 
+      vector: queryVector,
+      includeMetadata: true,
+    });
+    const similarArticles = queryResult.matches.map(match => match.metadata);
+    
+    if (similarArticles.length === 0) {
+      return response.status(404).json({ error: 'Failed to find similar news articles.' });
+    }
+
+    // 3. NLP로 종목 발굴 및 랭킹
+    const organizationCounts = {};
+    similarArticles.forEach(article => {
+      const doc = nlp(article.title);
+      const organizations = doc.organizations().out('array');
+      organizations.forEach(org => {
+        const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
+        organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
       });
-      return { themeName, articles: similarArticles, organizations: organizationCounts };
     });
 
-    const analysisResults = await Promise.all(themeAnalysisPromises);
+    const companyPromises = Object.keys(organizationCounts).map(orgName => getTickerForCompanyName(orgName));
+    const resolvedTickers = await Promise.all(companyPromises);
+    const validTickers = resolvedTickers.filter(Boolean);
 
-    // 2. 모든 테마에서 발굴된 종목들을 하나로 합치고 점수 계산
-    const globalTickerScores = {};
-    for (const result of analysisResults) {
-        const companyPromises = Object.keys(result.organizations).map(orgName => getTickerForCompanyName(orgName));
-        const resolvedTickers = await Promise.all(companyPromises);
-        const validTickers = resolvedTickers.filter(Boolean);
-        validTickers.forEach(ticker => {
-            globalTickerScores[ticker] = (globalTickerScores[ticker] || 0) + 1;
-        });
-    }
+    const tickerScores = {};
+    validTickers.forEach(ticker => {
+        tickerScores[ticker] = (tickerScores[ticker] || 0) + 1;
+    });
 
-    if (Object.keys(globalTickerScores).length === 0) {
-        return response.status(404).json({
-            error: 'Failed to process request',
-            details: 'Could not discover any stocks from all themes.'
-        });
-    }
-    
-    // 3. 최종 후보군을 스타일로 필터링하고 상위 종목 선정
-    const topTickers = Object.entries(globalTickerScores)
+    const topTickers = Object.entries(tickerScores)
       .sort((a, b) => b[1] - a[1])
       .map(entry => entry[0])
       .filter(ticker => kTickerInfo[ticker]?.style === style)
@@ -217,9 +206,7 @@ export default async function handler(request, response) {
 
     // 4. 주가 데이터 조회 및 최종 응답 생성
     const stockDataResults = await fetchStockDataFromYahoo(topTickers);
-    const topThemeName = analysisResults.sort((a, b) => b.articles.length - a.articles.length)[0].themeName;
-    const allFoundArticles = analysisResults.flatMap(r => r.articles);
-    
+
     if (stockDataResults.length === 0) {
         return response.status(404).json({
             error: 'Failed to process request',
@@ -240,15 +227,15 @@ export default async function handler(request, response) {
         const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
         const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
         const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-        const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
+        const relevantArticles = similarArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
 
-        return { ticker, companyName, latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0, chartData, timestamps, smaShortData, smaLongData, rsi: rsi14, trendingTheme: topThemeName, relevantArticles };
+        return { ticker, companyName, latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0, chartData, timestamps, smaShortData, smaLongData, rsi: rsi14, trendingTheme: themeSentence, relevantArticles };
     }).filter(Boolean);
 
     response.status(200).json({
       recommendations,
-      trendingTheme: topThemeName,
-      totalArticles: allFoundArticles.length,
+      trendingTheme: themeSentence,
+      totalArticles: similarArticles.length,
     });
 
   } catch (error) {
