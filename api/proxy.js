@@ -1,10 +1,10 @@
 // my-proxy-final/api/proxy.js
 
-import fetch from 'node-fetch';
-import { Pinecone } from '@pinecone-database/pinecone';
-import OpenAI from 'openai';
-import { Redis } from '@upstash/redis';
-import nlp from 'compromise';
+const fetch = require('node-fetch');
+const { Pinecone } = require('@pinecone-database/pinecone');
+const OpenAI = require('openai');
+const { Redis } = require('@upstash/redis');
+const nlp = require('compromise');
 
 // --- 상수 정의 ---
 const kInvestmentThemes = {
@@ -133,7 +133,7 @@ function calculateRSI(data, period = 14) {
 }
 
 // --- 메인 핸들러 ---
-export default async function handler(request, response) {
+module.exports = async (request, response) => {
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -153,22 +153,10 @@ export default async function handler(request, response) {
 
     // 1. 모든 테마에 대해 동시 분석 실행
     const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
-      // 각 테마의 쿼리 문장을 벡터로 변환
-      const embeddingResponse = await openai.embeddings.create({
-        model: 'text-embedding-3-small',
-        input: [themeData.query],
-      });
+      const embeddingResponse = await openai.embeddings.create({ model: 'text-embedding-3-small', input: [themeData.query] });
       const queryVector = embeddingResponse.data[0].embedding;
-      
-      // Pinecone에서 유사 뉴스 검색
-      const queryResult = await index.query({
-        topK: 100, // 각 테마별로 가장 관련성 높은 뉴스 100개 검색
-        vector: queryVector,
-        includeMetadata: true,
-      });
+      const queryResult = await index.query({ topK: 100, vector: queryVector, includeMetadata: true });
       const similarArticles = queryResult.matches.map(match => match.metadata);
-
-      // NLP로 종목 발굴
       const organizationCounts = {};
       similarArticles.forEach(article => {
         const doc = nlp(article.title);
@@ -195,10 +183,7 @@ export default async function handler(request, response) {
     }
 
     if (Object.keys(globalTickerScores).length === 0) {
-        return response.status(404).json({
-            error: 'Failed to process request',
-            details: 'Could not discover any stocks from all themes.'
-        });
+        return response.status(404).json({ details: 'Could not discover any stocks from all themes.' });
     }
     
     // 3. 최종 후보군을 스타일로 필터링하고 상위 종목 선정
@@ -210,10 +195,7 @@ export default async function handler(request, response) {
       .slice(0, 3);
     
     if (topTickers.length === 0) {
-        return response.status(404).json({
-            error: 'Failed to process request',
-            details: `Could not discover any stocks for the selected style (${style}).`
-        });
+        return response.status(404).json({ details: `Could not discover any stocks for the selected style (${style}).` });
     }
 
     // 4. 주가 데이터 조회 및 최종 응답 생성
@@ -222,28 +204,36 @@ export default async function handler(request, response) {
     const allFoundArticles = analysisResults.flatMap(r => r.articles);
     
     if (stockDataResults.length === 0) {
-        return response.status(404).json({
-            error: 'Failed to process request',
-            details: 'Successfully found themes, but failed to fetch stock data for top tickers.'
-        });
+        return response.status(404).json({ details: 'Successfully found themes, but failed to fetch stock data for top tickers.' });
     }
 
     const recommendations = stockDataResults.map(stockData => {
-        if (!stockData || !stockData.meta) return null;
-        const ticker = stockData.meta.symbol;
-        const timestamps = stockData.timestamp || [];
-        const quotes = stockData.indicators?.quote?.[0]?.close?.filter(q => q != null) || [];
-        const smaShort = calculateSMA(quotes, 5);
-        const smaLong = calculateSMA(quotes, 20);
-        const rsi14 = calculateRSI(quotes, 14);
-        const chartData = quotes.map((q, i) => ({ x: i, y: q }));
-        const smaShortData = smaShort.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
-        const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
-        const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
-        const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-        const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
-
-        return { ticker, companyName, latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0, chartData, timestamps, smaShortData, smaLongData, rsi: rsi14, trendingTheme: topThemeName, relevantArticles };
+      if (!stockData || !stockData.meta) return null;
+      const ticker = stockData.meta.symbol;
+      const timestamps = stockData.timestamp || [];
+      const quotes = stockData.indicators?.quote?.[0]?.close?.filter(q => q != null) || [];
+      const smaShort = calculateSMA(quotes, 5);
+      const smaLong = calculateSMA(quotes, 20);
+      const rsi14 = calculateRSI(quotes, 14);
+      const chartData = quotes.map((q, i) => ({ x: i, y: q }));
+      const smaShortData = smaShort.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
+      const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
+      const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
+      const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
+      const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
+      
+      return {
+        ticker,
+        companyName,
+        latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0,
+        chartData,
+        timestamps,
+        smaShortData,
+        smaLongData,
+        rsi: rsi14,
+        trendingTheme: topThemeName,
+        relevantArticles
+      };
     }).filter(Boolean);
 
     response.status(200).json({
@@ -256,4 +246,4 @@ export default async function handler(request, response) {
     console.error('Server Error:', error);
     response.status(500).json({ error: 'Failed to process request', details: error.message });
   }
-}
+};
