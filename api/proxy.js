@@ -9,16 +9,16 @@ import nlp from 'compromise';
 // --- 상수 정의 ---
 const kInvestmentThemes = {
   '인공지능(AI)': {
-    query: '"artificial intelligence" OR "AI" OR "machine learning" OR nvidia OR openai',
+    query: 'The future of artificial intelligence, semiconductor chips, and machine learning models.',
   },
   '메타버스 & VR': {
-    query: 'metaverse OR "virtual reality" OR "augmented reality" OR meta OR appl',
+    query: 'Trends in metaverse platforms, virtual reality headsets, and augmented reality applications.',
   },
   '전기차 & 자율주행': {
-    query: '"electric vehicle" OR "self-driving" OR tesla OR rivian OR lucid',
+    query: 'The market for electric vehicles, self-driving car technology, and battery innovation.',
   },
   '클라우드 컴퓨팅': {
-    query: '"cloud computing" OR aws OR "amazon web services" OR "google cloud" OR azure',
+    query: 'Growth in cloud computing, data centers, and enterprise software as a service (SaaS).',
   }
 };
 
@@ -206,6 +206,7 @@ export default async function handler(request, response) {
       .sort((a, b) => b[1] - a[1])
       .map(entry => entry[0])
       .filter(ticker => kTickerInfo[ticker]?.style === style)
+      .filter(ticker => ticker !== 'AI') // ✨ 'AI' 티커를 제외하는 테스트 필터
       .slice(0, 3);
     
     if (topTickers.length === 0) {
