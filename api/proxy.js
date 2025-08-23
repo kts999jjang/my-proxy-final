@@ -1,23 +1,24 @@
 // my-proxy-final/api/proxy.js
 
-const fetch = require('node-fetch');
-const nlp = require('compromise');
-const { Redis } = require('@upstash/redis');
+import fetch from 'node-fetch';
+import { Pinecone } from '@pinecone-database/pinecone';
+import OpenAI from 'openai';
+import { Redis } from '@upstash/redis';
+import nlp from 'compromise';
 
 // --- 상수 정의 ---
-
 const kInvestmentThemes = {
   '인공지능(AI)': {
-    query: '"artificial intelligence" OR "AI" OR "machine learning" OR nvidia OR openai',
+    query: 'The future of artificial intelligence, semiconductor chips, and machine learning models.',
   },
   '메타버스 & VR': {
-    query: 'metaverse OR "virtual reality" OR "augmented reality" OR meta OR appl',
+    query: 'Trends in metaverse platforms, virtual reality headsets, and augmented reality applications.',
   },
   '전기차 & 자율주행': {
-    query: '"electric vehicle" OR "self-driving" OR tesla OR rivian OR lucid',
+    query: 'The market for electric vehicles, self-driving car technology, and battery innovation.',
   },
   '클라우드 컴퓨팅': {
-    query: '"cloud computing" OR aws OR "amazon web services" OR "google cloud" OR azure',
+    query: 'Growth in cloud computing, data centers, and enterprise software as a service (SaaS).',
   }
 };
 
@@ -44,95 +45,10 @@ const kTickerInfo = {
 };
 
 
-// --- API 호출 함수들 ---
-
-async function fetchNewsForTheme(themeName, themeQuery, analysisDays) {
-  const fromDate = new Date(Date.now() - analysisDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-  const newsApiKey = process.env.NEWS_API_KEY;
-  const gnewsApiKey = process.env.GNEWS_API_KEY;
-  const maxArticlesToFetch = 500;
-  const pageSize = 100;
-
-  try {
-    if (!newsApiKey) throw new Error('NEWS_API_KEY is not set.');
-    
-    const fetchLanguage = async (lang) => {
-      let allArticles = [];
-      let totalResults = 0;
-      let page = 1;
-      
-      while (allArticles.length < maxArticlesToFetch) {
-        const url = `https://newsapi.org/v2/everything?q=(${themeQuery})&from=${fromDate}&sortBy=popularity&language=${lang}&pageSize=${pageSize}&page=${page}&apiKey=${newsApiKey}`;
-        const response = await fetch(url);
-        if (!response.ok) {
-           if (response.status === 426) {
-               console.warn(`NewsAPI(${lang}) upgrade required to access more pages. Stopping at page ${page-1}.`);
-               break; 
-           }
-           throw new Error(`NewsAPI(${lang}) request failed at page ${page} with status ${response.status}`);
-        }
-        
-        const data = await response.json();
-        if (page === 1) {
-            totalResults = data.totalResults || 0;
-        }
-
-        const fetchedArticles = data.articles || [];
-        if (fetchedArticles.length === 0) {
-            break;
-        }
-        allArticles.push(...fetchedArticles);
-        
-        if (allArticles.length >= totalResults || allArticles.length >= maxArticlesToFetch) {
-            break;
-        }
-        page++;
-      }
-      return { articles: allArticles, totalResults };
-    };
-
-    const [enResult, koResult] = await Promise.all([fetchLanguage('en'), fetchLanguage('ko')]);
-
-    const combinedArticles = [...enResult.articles, ...koResult.articles];
-    const combinedTotalResults = enResult.totalResults + koResult.totalResults;
-
-    if (combinedArticles.length === 0) throw new Error('All NewsAPI requests failed to return articles.');
-    
-    return {
-      themeName,
-      totalResults: combinedTotalResults,
-      articles: combinedArticles.map(a => ({
-        title: a.title || '',
-        url: a.url,
-        source: a.source?.name,
-        publishedAt: a.publishedAt,
-      })),
-    };
-
-  } catch (error) {
-    console.warn(`NewsAPI process failed for theme "${themeName}", trying GNews. Reason: ${error.message}`);
-    if (!gnewsApiKey) throw new Error('GNEWS_API_KEY is not set.');
-    const gnewsQuery = `(${themeQuery})&topic=business,technology,science,health`;
-    const url = `https://gnews.io/api/v4/search?q=${gnewsQuery}&lang=en&max=100&apikey=${gnewsApiKey}`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`GNews request failed with status ${response.status}`);
-    const data = await response.json();
-    return {
-      themeName,
-      totalResults: data.totalArticles || 0,
-      articles: data.articles.map(a => ({
-        title: a.title || '',
-        url: a.url,
-        source: a.source?.name,
-        publishedAt: a.publishedAt,
-      })),
-    };
-  }
-}
+// --- API 호출 및 계산 함수들 ---
 
 async function fetchStockDataFromYahoo(tickers) {
   if (!tickers || tickers.length === 0) return [];
-
   const requests = tickers.map(async (ticker) => {
     try {
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=1mo&interval=1d`;
@@ -148,7 +64,6 @@ async function fetchStockDataFromYahoo(tickers) {
       return null;
     }
   });
-
   const results = await Promise.all(requests);
   return results.filter(Boolean);
 }
@@ -158,30 +73,24 @@ async function getTickerForCompanyName(companyName) {
     url: process.env.UPSTASH_REDIS_REST_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN,
   });
-
   const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-  
   const cachedTicker = await redis.get(cleanedName);
   if (cachedTicker) {
     console.log(`[CACHE HIT] Found ticker for "${cleanedName}": ${cachedTicker}`);
     return cachedTicker;
   }
-
   console.log(`[CACHE MISS] Searching ticker for "${cleanedName}" via API...`);
   const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
   if (!apiKey) throw new Error('ALPHA_VANTAGE_API_KEY is not set.');
-  
   const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${cleanedName}&apikey=${apiKey}`;
   const response = await fetch(url);
   const data = await response.json();
-
   const bestMatch = data?.bestMatches?.[0];
   if (bestMatch && parseFloat(bestMatch['9. matchScore']) > 0.7) {
     const ticker = bestMatch['1. symbol'];
     await redis.set(cleanedName, ticker, { ex: 60 * 60 * 24 * 7 });
     return ticker;
   }
-  
   return null;
 }
 
@@ -200,10 +109,8 @@ function calculateSMA(data, period) {
 
 function calculateRSI(data, period = 14) {
   if (!data || data.length <= period) return null;
-  
   let gains = [];
   let losses = [];
-
   for (let i = 1; i < data.length; i++) {
     const diff = data[i] - data[i - 1];
     if (diff >= 0) {
@@ -214,23 +121,19 @@ function calculateRSI(data, period = 14) {
       losses.push(-diff);
     }
   }
-
   let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
   let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
-
   for (let i = period; i < gains.length; i++) {
     avgGain = (avgGain * (period - 1) + gains[i]) / period;
     avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
   }
-
   if (avgLoss === 0) return 100;
   const rs = avgGain / avgLoss;
   return 100 - (100 / (1 + rs));
 }
 
-
 // --- 메인 핸들러 ---
-module.exports = async (request, response) => {
+export default async function handler(request, response) {
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -239,51 +142,72 @@ module.exports = async (request, response) => {
   }
 
   try {
-    const { analysisDays = '14', style = 'leading' } = request.query;
+    const { style = 'leading' } = request.query;
 
-    const themePromises = Object.entries(kInvestmentThemes).map(([themeName, themeData]) =>
-      fetchNewsForTheme(themeName, themeData.query, parseInt(analysisDays))
-    );
-    const themeResults = await Promise.all(themePromises);
-    const topTheme = themeResults.sort((a, b) => b.totalResults - a.totalResults)[0];
-    
-    if (!topTheme || topTheme.totalResults < 5) {
-      return response.status(404).json({
-        error: 'Failed to process request',
-        details: 'Could not determine a significant trending theme.'
+    const pinecone = new Pinecone({
+        environment: process.env.PINECONE_ENVIRONMENT,
+        apiKey: process.env.PINECONE_API_KEY,
+    });
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const index = pinecone.index('news-index');
+
+    // 1. 모든 테마에 대해 동시 분석 실행
+    const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
+      // 각 테마의 쿼리 문장을 벡터로 변환
+      const embeddingResponse = await openai.embeddings.create({
+        model: 'text-embedding-3-small',
+        input: [themeData.query],
       });
+      const queryVector = embeddingResponse.data[0].embedding;
+      
+      // Pinecone에서 유사 뉴스 검색
+      const queryResult = await index.query({
+        topK: 100, // 각 테마별로 가장 관련성 높은 뉴스 100개 검색
+        vector: queryVector,
+        includeMetadata: true,
+      });
+      const similarArticles = queryResult.matches.map(match => match.metadata);
+
+      // NLP로 종목 발굴
+      const organizationCounts = {};
+      similarArticles.forEach(article => {
+        const doc = nlp(article.title);
+        const organizations = doc.organizations().out('array');
+        organizations.forEach(org => {
+          const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
+          organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
+        });
+      });
+      return { themeName, articles: similarArticles, organizations: organizationCounts };
+    });
+
+    const analysisResults = await Promise.all(themeAnalysisPromises);
+
+    // 2. 모든 테마에서 발굴된 종목들을 하나로 합치고 점수 계산
+    const globalTickerScores = {};
+    for (const result of analysisResults) {
+        const companyPromises = Object.keys(result.organizations).map(orgName => getTickerForCompanyName(orgName));
+        const resolvedTickers = await Promise.all(companyPromises);
+        const validTickers = resolvedTickers.filter(Boolean);
+        validTickers.forEach(ticker => {
+            globalTickerScores[ticker] = (globalTickerScores[ticker] || 0) + 1;
+        });
     }
 
-    const trendingThemeName = topTheme.themeName;
-    const allArticles = topTheme.articles;
-
-    const organizationCounts = {};
-    allArticles.forEach(article => {
-      const doc = nlp(article.title);
-      const organizations = doc.organizations().out('array');
-      organizations.forEach(org => {
-        const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-        organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
-      });
-    });
-
-    const companyPromises = Object.keys(organizationCounts)
-        .map(orgName => getTickerForCompanyName(orgName));
+    if (Object.keys(globalTickerScores).length === 0) {
+        return response.status(404).json({
+            error: 'Failed to process request',
+            details: 'Could not discover any stocks from all themes.'
+        });
+    }
     
-    const resolvedTickers = await Promise.all(companyPromises);
-    const validTickers = resolvedTickers.filter(Boolean);
-
-    const tickerScores = {};
-    validTickers.forEach(ticker => {
-        tickerScores[ticker] = (tickerScores[ticker] || 0) + 1;
-    });
-
-    const topTickers = Object.entries(tickerScores)
+    // 3. 최종 후보군을 스타일로 필터링하고 상위 종목 선정
+    const topTickers = Object.entries(globalTickerScores)
       .sort((a, b) => b[1] - a[1])
       .map(entry => entry[0])
       .filter(ticker => kTickerInfo[ticker]?.style === style)
       .slice(0, 3);
-
+    
     if (topTickers.length === 0) {
         return response.status(404).json({
             error: 'Failed to process request',
@@ -291,76 +215,44 @@ module.exports = async (request, response) => {
         });
     }
 
+    // 4. 주가 데이터 조회 및 최종 응답 생성
     const stockDataResults = await fetchStockDataFromYahoo(topTickers);
-
+    const topThemeName = analysisResults.sort((a, b) => b.articles.length - a.articles.length)[0].themeName;
+    const allFoundArticles = analysisResults.flatMap(r => r.articles);
+    
     if (stockDataResults.length === 0) {
-      return response.status(404).json({
-          error: 'Failed to process request',
-          details: 'Successfully found a theme, but failed to fetch stock data.'
-      });
+        return response.status(404).json({
+            error: 'Failed to process request',
+            details: 'Successfully found themes, but failed to fetch stock data for top tickers.'
+        });
     }
 
     const recommendations = stockDataResults.map(stockData => {
-      if (!stockData || !stockData.meta) return null;
-      
-      const ticker = stockData.meta.symbol;
-      const timestamps = stockData.timestamp || [];
-      const quotes = stockData.indicators?.quote?.[0]?.close?.filter(q => q != null) || [];
-      
-      const smaShort = calculateSMA(quotes, 5);
-      const smaLong = calculateSMA(quotes, 20);
-      const rsi14 = calculateRSI(quotes, 14);
-      
-      const chartData = quotes.map((q, i) => ({ x: i, y: q }));
-      const smaShortData = smaShort.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
-      const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
-      
-      const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
-      const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-      const allRelatedArticles = allArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw)));
-      
-      const dailyCounts = {};
-      allRelatedArticles.forEach(article => {
-        if (!article.publishedAt) return;
-        const date = new Date(article.publishedAt).toISOString().split('T')[0];
-        dailyCounts[date] = (dailyCounts[date] || 0) + 1;
-      });
+        if (!stockData || !stockData.meta) return null;
+        const ticker = stockData.meta.symbol;
+        const timestamps = stockData.timestamp || [];
+        const quotes = stockData.indicators?.quote?.[0]?.close?.filter(q => q != null) || [];
+        const smaShort = calculateSMA(quotes, 5);
+        const smaLong = calculateSMA(quotes, 20);
+        const rsi14 = calculateRSI(quotes, 14);
+        const chartData = quotes.map((q, i) => ({ x: i, y: q }));
+        const smaShortData = smaShort.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
+        const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
+        const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
+        const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
+        const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
 
-      const wordCounts = {};
-      const stopWords = ['a', 'an', 'the', 'in', 'on', 'for', 'with', 'of', 'to', 'is', 'and', 'or', ...searchKeywords];
-      allRelatedArticles.forEach(article => {
-        const words = article.title.toLowerCase().replace(/'s/g, '').replace(/[^a-z0-9\s]/g, '').split(/\s+/);
-        words.forEach(word => {
-          if (word.length > 2 && !stopWords.includes(word) && isNaN(word)) {
-            wordCounts[word] = (wordCounts[word] || 0) + 1;
-          }
-        });
-      });
-      
-      return {
-        ticker,
-        companyName,
-        latestPrice: quotes.length > 0 ? quotes[quotes.length - 1] : 0,
-        chartData,
-        timestamps,
-        smaShortData,
-        smaLongData,
-        rsi: rsi14,
-        trendingTheme: trendingThemeName,
-        relevantArticles: allRelatedArticles.slice(0, 5),
-        dailyNewsStats: dailyCounts,
-        topKeywords: Object.entries(wordCounts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(e=>e[0]),
-      };
+        return { ticker, companyName, latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0, chartData, timestamps, smaShortData, smaLongData, rsi: rsi14, trendingTheme: topThemeName, relevantArticles };
     }).filter(Boolean);
 
     response.status(200).json({
       recommendations,
-      trendingTheme: trendingThemeName,
-      totalArticles: allArticles.length,
+      trendingTheme: topThemeName,
+      totalArticles: allFoundArticles.length,
     });
 
   } catch (error) {
     console.error('Server Error:', error);
     response.status(500).json({ error: 'Failed to process request', details: error.message });
   }
-};
+}
