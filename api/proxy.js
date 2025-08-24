@@ -142,6 +142,7 @@ module.exports = async (request, response) => {
 
   try {
     const { analysisDays = '14', style = 'leading' } = request.query;
+    console.log(`[DEBUG] Received request: analysisDays=${analysisDays}, style=${style}`); // ✨ 로그 추가
     
     const fromDate = new Date();
     fromDate.setDate(fromDate.getDate() - parseInt(analysisDays, 10));
@@ -156,6 +157,10 @@ module.exports = async (request, response) => {
       const gnewsUrl = `https://gnews.io/api/v4/search?q=(${themeData.query})&topic=business,technology&lang=en&max=10&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
       const latestNewsResponse = await fetch(gnewsUrl);
       const latestNews = await latestNewsResponse.json();
+
+      // ✨ 로그 추가: GNews 결과 확인
+      console.log(`[DEBUG] GNews articles found for theme '${themeName}':`, latestNews.articles ? latestNews.articles.length : 0);
+      
       if (!latestNews.articles || latestNews.articles.length === 0) return { themeName, tickers: {}, articles: [] };
       
       const headlines = latestNews.articles.map(a => a.title).join('\n');
@@ -181,6 +186,9 @@ module.exports = async (request, response) => {
         }
       });
       const similarArticles = queryResult.matches.map(match => match.metadata);
+
+      // ✨ 로그 추가: Pinecone 검색 결과 확인
+      console.log(`[DEBUG] Pinecone matches found for theme '${themeName}':`, similarArticles.length);
 
       const organizationCounts = {};
       const blacklist = new Set(['ai', 'corp', 'inc', 'ltd', 'llc', 'co', 'group']);
@@ -214,8 +222,12 @@ module.exports = async (request, response) => {
             }
         });
     }
+    
+    // ✨ 로그 추가: 최종 티커 점수 확인
+    console.log('[DEBUG] Final globalTickerScores:', JSON.stringify(globalTickerScores));
 
     if (Object.keys(globalTickerScores).length === 0) {
+        console.log('[DEBUG] No tickers found, returning 404 error.'); // ✨ 로그 추가
         return response.status(404).json({ details: 'Could not discover any stocks from all themes.' });
     }
     
