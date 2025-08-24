@@ -5,9 +5,9 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const OpenAI = require('openai');
 const { Redis } = require('@upstash/redis');
 const nlp = require('compromise');
+const { GoogleGenerativeAI } = require('@google/generative-ai'); // ✨ Gemini 추가
 
 // --- 상수 정의 ---
-// ✨ CHANGED: GNews 검색 효율을 높이기 위해 검색어를 키워드 중심으로 수정
 const kInvestmentThemes = {
   '인공지능(AI)': {
     query: '"artificial intelligence" OR "semiconductor" OR "machine learning" OR "NVIDIA"',
@@ -147,9 +147,11 @@ module.exports = async (request, response) => {
     const fromISO = fromDate.toISOString();
 
     const pinecone = new Pinecone(); 
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const index = pinecone.index('news-index');
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }); 
 
     const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
       const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=10&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
@@ -160,14 +162,10 @@ module.exports = async (request, response) => {
       
       const headlines = latestNews.articles.map(a => a.title).join('\n');
       
-      const chatResponse = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{
-          role: 'user',
-          content: `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`
-        }],
-      });
-      const themeSentence = chatResponse.choices[0].message.content;
+      const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
+      const result = await geminiModel.generateContent(prompt);
+      const geminiResponse = await result.response;
+      const themeSentence = geminiResponse.text();
 
       const embeddingResponse = await openai.embeddings.create({ model: 'text-embedding-3-small', input: [themeSentence] });
       const queryVector = embeddingResponse.data[0].embedding;
@@ -176,9 +174,7 @@ module.exports = async (request, response) => {
         topK: 100, 
         vector: queryVector, 
         includeMetadata: true,
-        filter: {
-          "publishedAt": { "$gte": fromDate.getTime() / 1000 }
-        }
+        filter: { "publishedAt": { "$gte": fromDate.getTime() / 1000 } }
       });
       const similarArticles = queryResult.matches.map(match => match.metadata);
 
