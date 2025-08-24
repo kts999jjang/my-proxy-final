@@ -44,8 +44,8 @@ const kTickerInfo = {
   'CRWD': { name: 'CrowdStrike Holdings', keywords: ['crowdstrike', 'cybersecurity'], style: 'growth' }
 };
 
-// --- API 호출 및 계산 함수들 ---
 
+// --- API 호출 및 계산 함수들 (기존과 동일) ---
 async function fetchStockDataFromYahoo(tickers) {
   if (!tickers || tickers.length === 0) return [];
   const requests = tickers.map(async (ticker) => {
@@ -131,6 +131,7 @@ function calculateRSI(data, period = 14) {
   return 100 - (100 / (1 + rs));
 }
 
+
 // --- 메인 핸들러 ---
 module.exports = async (request, response) => {
   response.setHeader('Access-Control-Allow-Origin', '*');
@@ -142,6 +143,11 @@ module.exports = async (request, response) => {
 
   try {
     const { analysisDays = '14', style = 'leading' } = request.query;
+    
+    // ✨ CHANGED: analysisDays를 사용하여 GNews 검색 시작 날짜 계산
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - parseInt(analysisDays, 10));
+    const fromISO = fromDate.toISOString();
 
     const pinecone = new Pinecone({
         environment: process.env.PINECONE_ENVIRONMENT,
@@ -151,7 +157,8 @@ module.exports = async (request, response) => {
     const index = pinecone.index('news-index');
 
     const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
-      const gnewsUrl = `https://gnews.io/api/v4/search?q=(${themeData.query})&topic=business,technology&lang=en&max=10&apikey=${process.env.GNEWS_API_KEY}`;
+      // ✨ CHANGED: GNews API 호출 시 'from' 파라미터 추가
+      const gnewsUrl = `https://gnews.io/api/v4/search?q=(${themeData.query})&topic=business,technology&lang=en&max=10&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
       const latestNewsResponse = await fetch(gnewsUrl);
       const latestNews = await latestNewsResponse.json();
       if (!latestNews.articles || latestNews.articles.length === 0) return { themeName, tickers: {}, articles: [] };
@@ -170,7 +177,15 @@ module.exports = async (request, response) => {
       const embeddingResponse = await openai.embeddings.create({ model: 'text-embedding-3-small', input: [themeSentence] });
       const queryVector = embeddingResponse.data[0].embedding;
       
-      const queryResult = await index.query({ topK: 100, vector: queryVector, includeMetadata: true });
+      // ✨ CHANGED: Pinecone 검색 결과도 날짜로 필터링 (메타데이터에 'publishedAt'이 있다는 가정)
+      const queryResult = await index.query({ 
+        topK: 100, 
+        vector: queryVector, 
+        includeMetadata: true,
+        filter: {
+          "publishedAt": { "$gte": fromDate.getTime() / 1000 } // Pinecone은 초 단위 타임스탬프를 사용할 수 있음
+        }
+      });
       const similarArticles = queryResult.matches.map(match => match.metadata);
 
       const organizationCounts = {};
@@ -241,7 +256,26 @@ module.exports = async (request, response) => {
         const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
         const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
         const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-        const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw))).slice(0, 5);
+        
+        // ✨ NEW: 특정 종목의 모든 관련 기사 필터링
+        const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw)));
+        
+        // ✨ NEW: dailyNewsStats 계산
+        const dailyNewsStats = {};
+        relevantArticles.forEach(article => {
+            if (article.publishedAt) {
+                const date = new Date(article.publishedAt * 1000).toISOString().split('T')[0];
+                dailyNewsStats[date] = (dailyNewsStats[date] || 0) + 1;
+            }
+        });
+
+        // ✨ NEW: topKeywords 계산
+        const titleText = relevantArticles.map(a => a.title).join(' ');
+        const doc = nlp(titleText);
+        const topKeywords = doc.nouns().out('freq')
+                               .filter(item => item.normal.length > 2 && isNaN(item.normal))
+                               .slice(0, 10)
+                               .map(item => item.normal);
         
         return {
           ticker,
@@ -253,7 +287,9 @@ module.exports = async (request, response) => {
           smaLongData,
           rsi: rsi14,
           trendingTheme: topThemeName,
-          relevantArticles
+          relevantArticles: relevantArticles.slice(0, 5), // 프론트엔드에는 5개만 전송
+          dailyNewsStats, // ✨ NEW
+          topKeywords,    // ✨ NEW
         };
     }).filter(Boolean);
 
