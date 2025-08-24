@@ -21,6 +21,7 @@ const kInvestmentThemes = {
     query: 'Growth in cloud computing, data centers, and enterprise software as a service (SaaS).',
   }
 };
+
 const kTickerInfo = {
   'NVDA': { name: 'NVIDIA Corp', keywords: ['nvidia', 'nvidia corp'], style: 'leading' },
   'MSFT': { name: 'Microsoft Corp', keywords: ['microsoft', 'microsoft corp'], style: 'leading' },
@@ -44,6 +45,7 @@ const kTickerInfo = {
 };
 
 // --- API 호출 및 계산 함수들 ---
+
 async function fetchStockDataFromYahoo(tickers) {
   if (!tickers || tickers.length === 0) return [];
   const requests = tickers.map(async (ticker) => {
@@ -139,7 +141,7 @@ module.exports = async (request, response) => {
   }
 
   try {
-    const { style = 'leading' } = request.query;
+    const { analysisDays = '14', style = 'leading' } = request.query;
 
     const pinecone = new Pinecone({
         environment: process.env.PINECONE_ENVIRONMENT,
@@ -149,17 +151,38 @@ module.exports = async (request, response) => {
     const index = pinecone.index('news-index');
 
     const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
-      const embeddingResponse = await openai.embeddings.create({ model: 'text-embedding-3-small', input: [themeData.query] });
+      const gnewsUrl = `https://gnews.io/api/v4/search?q=(${themeData.query})&topic=business,technology&lang=en&max=10&apikey=${process.env.GNEWS_API_KEY}`;
+      const latestNewsResponse = await fetch(gnewsUrl);
+      const latestNews = await latestNewsResponse.json();
+      if (!latestNews.articles || latestNews.articles.length === 0) return { themeName, tickers: {}, articles: [] };
+      
+      const headlines = latestNews.articles.map(a => a.title).join('\n');
+      
+      const chatResponse = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`
+        }],
+      });
+      const themeSentence = chatResponse.choices[0].message.content;
+
+      const embeddingResponse = await openai.embeddings.create({ model: 'text-embedding-3-small', input: [themeSentence] });
       const queryVector = embeddingResponse.data[0].embedding;
+      
       const queryResult = await index.query({ topK: 100, vector: queryVector, includeMetadata: true });
       const similarArticles = queryResult.matches.map(match => match.metadata);
+
       const organizationCounts = {};
+      const blacklist = new Set(['ai', 'corp', 'inc', 'ltd', 'llc', 'co', 'group']);
       similarArticles.forEach(article => {
         const doc = nlp(article.title);
         const organizations = doc.organizations().out('array');
         organizations.forEach(org => {
           const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-          organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
+          if (!blacklist.has(orgName) && orgName.length > 1) {
+            organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
+          }
         });
       });
       return { themeName, articles: similarArticles, organizations: organizationCounts };
@@ -168,11 +191,18 @@ module.exports = async (request, response) => {
     const analysisResults = await Promise.all(themeAnalysisPromises);
     const globalTickerScores = {};
     for (const result of analysisResults) {
-        const companyPromises = Object.keys(result.organizations).map(orgName => getTickerForCompanyName(orgName));
+        if (!result.organizations) continue;
+        const companyPromises = Object.keys(result.organizations)
+            .map(async (orgName) => {
+                const ticker = await getTickerForCompanyName(orgName);
+                return { ticker, count: result.organizations[orgName] };
+            });
         const resolvedTickers = await Promise.all(companyPromises);
-        const validTickers = resolvedTickers.filter(Boolean);
-        validTickers.forEach(ticker => {
-            globalTickerScores[ticker] = (globalTickerScores[ticker] || 0) + 1;
+        
+        resolvedTickers.forEach(({ ticker, count }) => {
+            if (ticker) {
+                globalTickerScores[ticker] = (globalTickerScores[ticker] || 0) + count;
+            }
         });
     }
 
@@ -184,7 +214,6 @@ module.exports = async (request, response) => {
       .sort((a, b) => b[1] - a[1])
       .map(entry => entry[0])
       .filter(ticker => kTickerInfo[ticker]?.style === style)
-      .filter(ticker => ticker !== 'AI') // ✨ 'AI' 티커를 제외하는 테스트 필터
       .slice(0, 3);
     
     if (topTickers.length === 0) {
@@ -192,7 +221,7 @@ module.exports = async (request, response) => {
     }
 
     const stockDataResults = await fetchStockDataFromYahoo(topTickers);
-    const topThemeName = analysisResults.sort((a, b) => b.articles.length - a.articles.length)[0].themeName;
+    const topThemeName = analysisResults.sort((a, b) => Object.keys(b.organizations).length - Object.keys(a.organizations).length)[0].themeName;
     const allFoundArticles = analysisResults.flatMap(r => r.articles);
     
     if (stockDataResults.length === 0) {
