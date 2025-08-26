@@ -59,6 +59,7 @@ async function fetchStockDataFromYahoo(tickers) {
 }
 
 async function getTickerForCompanyName(companyName) {
+  // This function uses Redis internally, but it's for a different purpose (caching ticker lookups)
   const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN,
@@ -144,20 +145,35 @@ module.exports = async (request, response) => {
     const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
+    const redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    });
 
     const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
-      const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=10&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
-      const latestNewsResponse = await fetch(gnewsUrl);
-      const latestNews = await latestNewsResponse.json();
+      const today = new Date().toISOString().split('T')[0];
+      const cacheKey = `summary:${themeName}:${today}`;
+      let themeSentence = await redis.get(cacheKey);
       
-      if (!latestNews.articles || latestNews.articles.length === 0) return { themeName, tickers: {}, articles: [] };
-      
-      const headlines = latestNews.articles.map(a => a.title).join('\n');
-      
-      const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
-      const result = await geminiModel.generateContent(prompt);
-      const geminiResponse = await result.response;
-      const themeSentence = geminiResponse.text();
+      if (!themeSentence) {
+        console.log(`[CACHE MISS] Generating new summary for theme: ${themeName}`);
+        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=10&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
+        const latestNewsResponse = await fetch(gnewsUrl);
+        const latestNews = await latestNewsResponse.json();
+        
+        if (!latestNews.articles || latestNews.articles.length === 0) return { themeName, tickers: {}, articles: [] };
+        
+        const headlines = latestNews.articles.map(a => a.title).join('\n');
+        
+        const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
+        const result = await geminiModel.generateContent(prompt);
+        const geminiResponse = await result.response;
+        themeSentence = geminiResponse.text();
+
+        await redis.set(cacheKey, themeSentence, { ex: 43200 }); // 12시간 캐싱
+      } else {
+        console.log(`[CACHE HIT] Using cached summary for theme: ${themeName}`);
+      }
 
       const embeddingResult = await embeddingModel.embedContent(themeSentence);
       const queryVector = embeddingResult.embedding.values;
