@@ -2,11 +2,12 @@
   "name": "my-proxy-final",
   "version": "1.0.0",
   "dependencies": {
-    "node-fetch": "^2.6.7",
-    "compromise": "^14.13.0",
-    "@upstash/redis": "^1.31.5",
+    "@google/generative-ai": "^0.14.1",
     "@pinecone-database/pinecone": "^2.2.2",
-    "openai": "^4.52.0",
-    "@google/generative-ai": "^0.14.1"
+    "@upstash/redis": "^1.31.5",
+    "compromise": "^14.13.0",
+    "dotenv": "^17.2.1",
+    "node-fetch": "^2.6.7",
+    "openai": "^4.52.0"
   }
 }

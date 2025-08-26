@@ -2,25 +2,16 @@
 
 const fetch = require('node-fetch');
 const { Pinecone } = require('@pinecone-database/pinecone');
-const OpenAI = require('openai');
 const { Redis } = require('@upstash/redis');
 const nlp = require('compromise');
-const { GoogleGenerativeAI } = require('@google/generative-ai'); // ✨ Gemini 추가
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // --- 상수 정의 ---
 const kInvestmentThemes = {
-  '인공지능(AI)': {
-    query: '"artificial intelligence" OR "semiconductor" OR "machine learning" OR "NVIDIA"',
-  },
-  '메타버스 & VR': {
-    query: '"metaverse" OR "virtual reality" OR "augmented reality" OR "Roblox" OR "Unity"',
-  },
-  '전기차 & 자율주행': {
-    query: '"electric vehicle" OR "self-driving" OR "autonomous car" OR "Tesla" OR "Rivian"',
-  },
-  '클라우드 컴퓨팅': {
-    query: '"cloud computing" OR "data center" OR "SaaS" OR "Amazon AWS" OR "Microsoft Azure"',
-  }
+  '인공지능(AI)': { query: '"artificial intelligence" OR "semiconductor" OR "machine learning" OR "NVIDIA"', },
+  '메타버스 & VR': { query: '"metaverse" OR "virtual reality" OR "augmented reality" OR "Roblox" OR "Unity"', },
+  '전기차 & 자율주행': { query: '"electric vehicle" OR "self-driving" OR "autonomous car" OR "Tesla" OR "Rivian"', },
+  '클라우드 컴퓨팅': { query: '"cloud computing" OR "data center" OR "SaaS" OR "Amazon AWS" OR "Microsoft Azure"', }
 };
 
 const kTickerInfo = {
@@ -147,11 +138,12 @@ module.exports = async (request, response) => {
     const fromISO = fromDate.toISOString();
 
     const pinecone = new Pinecone(); 
-    const index = pinecone.index('news-index');
+    const index = pinecone.index('gcp-starter-gemini');
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }); 
+    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+
 
     const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
       const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=10&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
@@ -167,8 +159,8 @@ module.exports = async (request, response) => {
       const geminiResponse = await result.response;
       const themeSentence = geminiResponse.text();
 
-      const embeddingResponse = await openai.embeddings.create({ model: 'text-embedding-3-small', input: [themeSentence] });
-      const queryVector = embeddingResponse.data[0].embedding;
+      const embeddingResult = await embeddingModel.embedContent(themeSentence);
+      const queryVector = embeddingResult.embedding.values;
       
       const queryResult = await index.query({ 
         topK: 100, 
