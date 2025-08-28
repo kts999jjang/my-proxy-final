@@ -151,11 +151,9 @@ module.exports = async (request, response) => {
       token: process.env.UPSTASH_REDIS_REST_TOKEN,
     });
 
-    const finalResults = {};
-
-    for (const themeName of selectedThemeNames) {
+    const analysisPromises = selectedThemeNames.map(async (themeName) => {
       const themeData = kInvestmentThemes[themeName];
-      if (!themeData) continue;
+      if (!themeData) return null;
 
       const today = new Date().toISOString().split('T')[0];
       const cacheKey = `summary:${themeName}:${today}`;
@@ -166,15 +164,12 @@ module.exports = async (request, response) => {
         const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=50&from=${fromDate.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
         const latestNewsResponse = await fetch(gnewsUrl);
         const latestNews = await latestNewsResponse.json();
-        
-        if (!latestNews.articles || latestNews.articles.length === 0) continue;
+        if (!latestNews.articles || latestNews.articles.length === 0) return null;
         
         const headlines = latestNews.articles.map(a => a.title).join('\n');
-        
         const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
         const result = await geminiModel.generateContent(prompt);
         themeSentence = result.response.text();
-
         await redis.set(cacheKey, themeSentence, { ex: 43200 });
       }
 
@@ -182,15 +177,12 @@ module.exports = async (request, response) => {
       const queryVector = embeddingResult.embedding.values;
       
       const queryResult = await index.query({ 
-        topK: 200,
-        vector: queryVector, 
-        includeMetadata: true,
+        topK: 200, vector: queryVector, includeMetadata: true,
         filter: { "publishedAt": { "$gte": fromDate.getTime() / 1000 } }
       });
       allFoundArticles = queryResult.matches.map(match => match.metadata);
-
-      if (allFoundArticles.length === 0) continue;
-
+      if (allFoundArticles.length === 0) return null;
+      
       const organizationCounts = {};
       const blacklist = new Set(['ai', 'corp', 'inc', 'ltd', 'llc', 'co', 'group']);
       allFoundArticles.forEach(article => {
@@ -210,17 +202,15 @@ module.exports = async (request, response) => {
           themeTickerScores[ticker] = (themeTickerScores[ticker] || 0) + organizationCounts[orgName];
         }
       }
-
-      if (Object.keys(themeTickerScores).length === 0) continue;
+      if (Object.keys(themeTickerScores).length === 0) return null;
       
       const leadingStocks = Object.entries(themeTickerScores).sort(([,a],[,b]) => b-a).filter(([t]) => kTickerInfo[t]?.style === 'leading').slice(0, 2).map(([t])=>t);
       const growthStocks = Object.entries(themeTickerScores).sort(([,a],[,b]) => b-a).filter(([t]) => kTickerInfo[t]?.style === 'growth').slice(0, 2).map(([t])=>t);
-      
       const topTickersForTheme = [...new Set([...leadingStocks, ...growthStocks])];
-      if (topTickersForTheme.length === 0) continue;
+      if (topTickersForTheme.length === 0) return null;
 
       const stockDataResults = await fetchStockDataFromYahoo(topTickersForTheme);
-      if (stockDataResults.length === 0) continue;
+      if (stockDataResults.length === 0) return null;
       
       const recommendations = stockDataResults.map(stockData => {
         if (!stockData || !stockData.meta) return null;
@@ -261,13 +251,25 @@ module.exports = async (request, response) => {
       }).filter(Boolean);
 
       if (recommendations.length > 0) {
-        finalResults[themeName] = {
-          styleInfo: {
+        return {
+          themeName: themeName,
+          data: {
+            styleInfo: {
               leading: recommendations.filter(r => kTickerInfo[r.ticker]?.style === 'leading'),
               growth: recommendations.filter(r => kTickerInfo[r.ticker]?.style === 'growth'),
+            }
           }
         };
       }
+      return null;
+    });
+
+    const analysisResults = (await Promise.all(analysisPromises)).filter(Boolean);
+    const finalResults = {};
+    for (const result of analysisResults) {
+        if (result) {
+            finalResults[result.themeName] = result.data;
+        }
     }
 
     response.status(200).json({ results: finalResults });
