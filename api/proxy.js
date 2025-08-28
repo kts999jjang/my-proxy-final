@@ -59,7 +59,6 @@ async function fetchStockDataFromYahoo(tickers) {
 }
 
 async function getTickerForCompanyName(companyName) {
-  // This function uses Redis internally, but it's for a different purpose (caching ticker lookups)
   const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN,
@@ -170,7 +169,7 @@ module.exports = async (request, response) => {
         const geminiResponse = await result.response;
         themeSentence = geminiResponse.text();
 
-        await redis.set(cacheKey, themeSentence, { ex: 43200 }); // 12시간 캐싱
+        await redis.set(cacheKey, themeSentence, { ex: 43200 });
       } else {
         console.log(`[CACHE HIT] Using cached summary for theme: ${themeName}`);
       }
@@ -223,11 +222,12 @@ module.exports = async (request, response) => {
         return response.status(404).json({ details: 'Could not discover any stocks from all themes.' });
     }
     
+    // ✨ CHANGED: 사용자가 요청한 'style'에 맞는 종목만 필터링하도록 수정
     const topTickers = Object.entries(globalTickerScores)
-      .sort((a, b) => b[1] - a[1])
-      .map(entry => entry[0])
-      .filter(ticker => kTickerInfo[ticker]?.style === style)
-      .slice(0, 3);
+      .sort(([, scoreA], [, scoreB]) => scoreB - scoreA)
+      .filter(([ticker]) => kTickerInfo[ticker]?.style === style)
+      .slice(0, 3)
+      .map(([ticker]) => ticker);
     
     if (topTickers.length === 0) {
         return response.status(404).json({ details: `Could not discover any stocks for the selected style (${style}).` });
