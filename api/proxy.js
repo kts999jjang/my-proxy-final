@@ -11,7 +11,10 @@ const kInvestmentThemes = {
   '인공지능(AI)': { query: '"artificial intelligence" OR "semiconductor" OR "machine learning" OR "NVIDIA"', },
   '메타버스 & VR': { query: '"metaverse" OR "virtual reality" OR "augmented reality" OR "Roblox" OR "Unity"', },
   '전기차 & 자율주행': { query: '"electric vehicle" OR "self-driving" OR "autonomous car" OR "Tesla" OR "Rivian"', },
-  '클라우드 컴퓨팅': { query: '"cloud computing" OR "data center" OR "SaaS" OR "Amazon AWS" OR "Microsoft Azure"', }
+  '클라우드 컴퓨팅': { query: '"cloud computing" OR "data center" OR "SaaS" OR "Amazon AWS" OR "Microsoft Azure"', },
+  '바이오/헬스케어': { query: '"biotechnology" OR "healthcare" OR "pharmaceutical" OR "clinical trial"', },
+  '엔터테인먼트/미디어': { query: '"entertainment" OR "streaming" OR "media" OR "Disney" OR "Netflix"', },
+  '친환경/에너지': { query: '"renewable energy" OR "solar power" OR "wind power" OR "clean energy"', },
 };
 
 const kTickerInfo = {
@@ -131,8 +134,17 @@ module.exports = async (request, response) => {
   }
 
   try {
-    const { analysisDays = '14', style = 'leading' } = request.query;
+    const { 
+      analysisDays = '14', 
+      style = 'leading',
+      themes = '인공지능(AI)' 
+    } = request.query;
     
+    const selectedThemeNames = themes.split(',');
+    if (selectedThemeNames.length === 0 || selectedThemeNames[0] === '') {
+        return response.status(200).json({ recommendations: [], trendingTheme: '분석할 테마를 선택해주세요.', totalArticles: 0 });
+    }
+
     const fromDate = new Date();
     fromDate.setDate(fromDate.getDate() - parseInt(analysisDays, 10));
     const fromISO = fromDate.toISOString();
@@ -149,14 +161,17 @@ module.exports = async (request, response) => {
       token: process.env.UPSTASH_REDIS_REST_TOKEN,
     });
 
-    const themeAnalysisPromises = Object.entries(kInvestmentThemes).map(async ([themeName, themeData]) => {
+    const themeAnalysisPromises = selectedThemeNames.map(async (themeName) => {
+      const themeData = kInvestmentThemes[themeName];
+      if (!themeData) return { themeName, tickers: {}, articles: [] };
+
       const today = new Date().toISOString().split('T')[0];
       const cacheKey = `summary:${themeName}:${today}`;
       let themeSentence = await redis.get(cacheKey);
       
       if (!themeSentence) {
         console.log(`[CACHE MISS] Generating new summary for theme: ${themeName}`);
-        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=10&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
+        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=50&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
         const latestNewsResponse = await fetch(gnewsUrl);
         const latestNews = await latestNewsResponse.json();
         
@@ -222,7 +237,6 @@ module.exports = async (request, response) => {
         return response.status(404).json({ details: 'Could not discover any stocks from all themes.' });
     }
     
-    // ✨ CHANGED: 사용자가 요청한 'style'에 맞는 종목만 필터링하도록 수정
     const topTickers = Object.entries(globalTickerScores)
       .sort(([, scoreA], [, scoreB]) => scoreB - scoreA)
       .filter(([ticker]) => kTickerInfo[ticker]?.style === style)
@@ -234,7 +248,7 @@ module.exports = async (request, response) => {
     }
 
     const stockDataResults = await fetchStockDataFromYahoo(topTickers);
-    const topThemeName = analysisResults.sort((a, b) => Object.keys(b.organizations).length - Object.keys(a.organizations).length)[0].themeName;
+    const topThemeName = analysisResults.filter(r => r.articles.length > 0).sort((a, b) => b.articles.length - a.articles.length)[0]?.themeName || selectedThemeNames.join(', ');
     const allFoundArticles = analysisResults.flatMap(r => r.articles);
     
     if (stockDataResults.length === 0) {
