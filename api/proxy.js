@@ -36,7 +36,11 @@ const kTickerInfo = {
   'AMZN': { name: 'Amazon.com, Inc.', keywords: ['amazon', 'amazon.com'], style: 'leading' },
   'GOOGL': { name: 'Alphabet Inc.', keywords: ['alphabet', 'google'], style: 'leading' },
   'SNOW': { name: 'Snowflake Inc.', keywords: ['snowflake', 'data cloud'], style: 'growth' },
-  'CRWD': { name: 'CrowdStrike Holdings', keywords: ['crowdstrike', 'cybersecurity'], style: 'growth' }
+  'CRWD': { name: 'CrowdStrike Holdings', keywords: ['crowdstrike', 'cybersecurity'], style: 'growth' },
+  'MRNA': { name: 'Moderna, Inc.', keywords: ['moderna'], style: 'growth' },
+  'PFE': { name: 'Pfizer Inc.', keywords: ['pfizer'], style: 'leading' },
+  'DIS': { name: 'The Walt Disney Company', keywords: ['disney'], style: 'leading' },
+  'NFLX': { name: 'Netflix, Inc.', keywords: ['netflix'], style: 'leading' }
 };
 
 // --- API 호출 및 계산 함수들 ---
@@ -68,9 +72,7 @@ async function getTickerForCompanyName(companyName) {
   });
   const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
   const cachedTicker = await redis.get(cleanedName);
-  if (cachedTicker) {
-    return cachedTicker;
-  }
+  if (cachedTicker) { return cachedTicker; }
   const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
   if (!apiKey) throw new Error('ALPHA_VANTAGE_API_KEY is not set.');
   const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${cleanedName}&apikey=${apiKey}`;
@@ -88,9 +90,7 @@ async function getTickerForCompanyName(companyName) {
 function calculateSMA(data, period) {
   if (!data || data.length < period) return [];
   const result = [];
-  for (let i = 0; i < period - 1; i++) {
-    result.push(null);
-  }
+  for (let i = 0; i < period - 1; i++) { result.push(null); }
   for (let i = period - 1; i < data.length; i++) {
     const sum = data.slice(i - period + 1, i + 1).reduce((acc, val) => acc + val, 0);
     result.push(sum / period);
@@ -104,13 +104,8 @@ function calculateRSI(data, period = 14) {
   let losses = [];
   for (let i = 1; i < data.length; i++) {
     const diff = data[i] - data[i - 1];
-    if (diff >= 0) {
-      gains.push(diff);
-      losses.push(0);
-    } else {
-      gains.push(0);
-      losses.push(-diff);
-    }
+    if (diff >= 0) { gains.push(diff); losses.push(0); }
+    else { gains.push(0); losses.push(-diff); }
   }
   let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
   let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
@@ -123,139 +118,111 @@ function calculateRSI(data, period = 14) {
   return 100 - (100 / (1 + rs));
 }
 
-
 // --- 메인 핸들러 ---
 module.exports = async (request, response) => {
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (request.method === 'OPTIONS') {
-    return response.status(200).end();
-  }
+  if (request.method === 'OPTIONS') { return response.status(200).end(); }
 
   try {
     const { 
       analysisDays = '14', 
-      style = 'leading',
       themes = '인공지능(AI)' 
     } = request.query;
     
     const selectedThemeNames = themes.split(',');
     if (selectedThemeNames.length === 0 || selectedThemeNames[0] === '') {
-        return response.status(200).json({ recommendations: [], trendingTheme: '분석할 테마를 선택해주세요.', totalArticles: 0 });
+        return response.status(200).json({ results: {} });
     }
 
     const fromDate = new Date();
     fromDate.setDate(fromDate.getDate() - parseInt(analysisDays, 10));
-    const fromISO = fromDate.toISOString();
-
+    
     const pinecone = new Pinecone(); 
     const index = pinecone.index('gcp-starter-gemini');
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-
+    
     const redis = new Redis({
       url: process.env.UPSTASH_REDIS_REST_URL,
       token: process.env.UPSTASH_REDIS_REST_TOKEN,
     });
 
-    const themeAnalysisPromises = selectedThemeNames.map(async (themeName) => {
+    const finalResults = {};
+
+    for (const themeName of selectedThemeNames) {
       const themeData = kInvestmentThemes[themeName];
-      if (!themeData) return { themeName, tickers: {}, articles: [] };
+      if (!themeData) continue;
 
       const today = new Date().toISOString().split('T')[0];
       const cacheKey = `summary:${themeName}:${today}`;
       let themeSentence = await redis.get(cacheKey);
       
+      let allFoundArticles = [];
       if (!themeSentence) {
-        console.log(`[CACHE MISS] Generating new summary for theme: ${themeName}`);
-        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=50&from=${fromISO}&apikey=${process.env.GNEWS_API_KEY}`;
+        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=50&from=${fromDate.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
         const latestNewsResponse = await fetch(gnewsUrl);
         const latestNews = await latestNewsResponse.json();
         
-        if (!latestNews.articles || latestNews.articles.length === 0) return { themeName, tickers: {}, articles: [] };
+        if (!latestNews.articles || latestNews.articles.length === 0) continue;
         
         const headlines = latestNews.articles.map(a => a.title).join('\n');
         
         const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
         const result = await geminiModel.generateContent(prompt);
-        const geminiResponse = await result.response;
-        themeSentence = geminiResponse.text();
+        themeSentence = result.response.text();
 
         await redis.set(cacheKey, themeSentence, { ex: 43200 });
-      } else {
-        console.log(`[CACHE HIT] Using cached summary for theme: ${themeName}`);
       }
 
       const embeddingResult = await embeddingModel.embedContent(themeSentence);
       const queryVector = embeddingResult.embedding.values;
       
       const queryResult = await index.query({ 
-        topK: 100, 
+        topK: 200,
         vector: queryVector, 
         includeMetadata: true,
         filter: { "publishedAt": { "$gte": fromDate.getTime() / 1000 } }
       });
-      const similarArticles = queryResult.matches.map(match => match.metadata);
+      allFoundArticles = queryResult.matches.map(match => match.metadata);
+
+      if (allFoundArticles.length === 0) continue;
 
       const organizationCounts = {};
       const blacklist = new Set(['ai', 'corp', 'inc', 'ltd', 'llc', 'co', 'group']);
-      similarArticles.forEach(article => {
+      allFoundArticles.forEach(article => {
         const doc = nlp(article.title);
-        const organizations = doc.organizations().out('array');
-        organizations.forEach(org => {
+        doc.organizations().out('array').forEach(org => {
           const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
           if (!blacklist.has(orgName) && orgName.length > 1) {
             organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
           }
         });
       });
-      return { themeName, articles: similarArticles, organizations: organizationCounts };
-    });
 
-    const analysisResults = await Promise.all(themeAnalysisPromises);
-    const globalTickerScores = {};
-    for (const result of analysisResults) {
-        if (!result.organizations) continue;
-        const companyPromises = Object.keys(result.organizations)
-            .map(async (orgName) => {
-                const ticker = await getTickerForCompanyName(orgName);
-                return { ticker, count: result.organizations[orgName] };
-            });
-        const resolvedTickers = await Promise.all(companyPromises);
-        
-        resolvedTickers.forEach(({ ticker, count }) => {
-            if (ticker) {
-                globalTickerScores[ticker] = (globalTickerScores[ticker] || 0) + count;
-            }
-        });
-    }
+      const themeTickerScores = {};
+      for (const orgName of Object.keys(organizationCounts)) {
+        const ticker = await getTickerForCompanyName(orgName);
+        if (ticker) {
+          themeTickerScores[ticker] = (themeTickerScores[ticker] || 0) + organizationCounts[orgName];
+        }
+      }
 
-    if (Object.keys(globalTickerScores).length === 0) {
-        return response.status(404).json({ details: 'Could not discover any stocks from all themes.' });
-    }
-    
-    const topTickers = Object.entries(globalTickerScores)
-      .sort(([, scoreA], [, scoreB]) => scoreB - scoreA)
-      .filter(([ticker]) => kTickerInfo[ticker]?.style === style)
-      .slice(0, 3)
-      .map(([ticker]) => ticker);
-    
-    if (topTickers.length === 0) {
-        return response.status(404).json({ details: `Could not discover any stocks for the selected style (${style}).` });
-    }
+      if (Object.keys(themeTickerScores).length === 0) continue;
+      
+      const leadingStocks = Object.entries(themeTickerScores).sort(([,a],[,b]) => b-a).filter(([t]) => kTickerInfo[t]?.style === 'leading').slice(0, 2).map(([t])=>t);
+      const growthStocks = Object.entries(themeTickerScores).sort(([,a],[,b]) => b-a).filter(([t]) => kTickerInfo[t]?.style === 'growth').slice(0, 2).map(([t])=>t);
+      
+      const topTickersForTheme = [...new Set([...leadingStocks, ...growthStocks])];
+      if (topTickersForTheme.length === 0) continue;
 
-    const stockDataResults = await fetchStockDataFromYahoo(topTickers);
-    const topThemeName = analysisResults.filter(r => r.articles.length > 0).sort((a, b) => b.articles.length - a.articles.length)[0]?.themeName || selectedThemeNames.join(', ');
-    const allFoundArticles = analysisResults.flatMap(r => r.articles);
-    
-    if (stockDataResults.length === 0) {
-        return response.status(404).json({ details: 'Successfully found themes, but failed to fetch stock data for top tickers.' });
-    }
-
-    const recommendations = stockDataResults.map(stockData => {
+      const stockDataResults = await fetchStockDataFromYahoo(topTickersForTheme);
+      if (stockDataResults.length === 0) continue;
+      
+      const recommendations = stockDataResults.map(stockData => {
         if (!stockData || !stockData.meta) return null;
         const ticker = stockData.meta.symbol;
         const timestamps = stockData.timestamp || [];
@@ -268,9 +235,7 @@ module.exports = async (request, response) => {
         const smaLongData = smaLong.map((s, i) => s === null ? null : ({ x: i, y: s })).filter(Boolean);
         const companyName = kTickerInfo[ticker]?.name || stockData.meta.symbol;
         const searchKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-        
         const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw)));
-        
         const dailyNewsStats = {};
         relevantArticles.forEach(article => {
             if (article.publishedAt) {
@@ -278,7 +243,6 @@ module.exports = async (request, response) => {
                 dailyNewsStats[date] = (dailyNewsStats[date] || 0) + 1;
             }
         });
-
         const titleText = relevantArticles.map(a => a.title).join(' ');
         const doc = nlp(titleText);
         const topKeywords = doc.nouns().out('freq')
@@ -287,26 +251,26 @@ module.exports = async (request, response) => {
                                .map(item => item.normal);
         
         return {
-          ticker,
-          companyName,
+          ticker, companyName,
           latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0,
-          chartData,
-          timestamps,
-          smaShortData,
-          smaLongData,
-          rsi: rsi14,
-          trendingTheme: topThemeName,
+          chartData, timestamps, smaShortData, smaLongData, rsi: rsi14,
+          trendingTheme: themeName,
           relevantArticles: relevantArticles.slice(0, 5),
-          dailyNewsStats,
-          topKeywords,
+          dailyNewsStats, topKeywords,
         };
-    }).filter(Boolean);
+      }).filter(Boolean);
 
-    response.status(200).json({
-      recommendations,
-      trendingTheme: topThemeName,
-      totalArticles: allFoundArticles.length,
-    });
+      if (recommendations.length > 0) {
+        finalResults[themeName] = {
+          styleInfo: {
+              leading: recommendations.filter(r => kTickerInfo[r.ticker]?.style === 'leading'),
+              growth: recommendations.filter(r => kTickerInfo[r.ticker]?.style === 'growth'),
+          }
+        };
+      }
+    }
+
+    response.status(200).json({ results: finalResults });
 
   } catch (error) {
     console.error('Server Error:', error);
