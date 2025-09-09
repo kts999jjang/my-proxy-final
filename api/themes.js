@@ -1,30 +1,18 @@
-// my-proxy-final/api/themes.js
+// /api/themes.js 또는 /api/proxy.js 에 임시로 붙여넣을 테스트 코드
 
-const { Redis } = require('@upstash/redis');
+// 12초(12000 밀리초)를 기다리는 함수
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 module.exports = async (request, response) => {
-  response.setHeader('Access-Control-Allow-Origin', '*');
-  response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  if (request.method === 'OPTIONS') { return response.status(200).end(); }
+  console.log("Timeout test started. Waiting for 12 seconds...");
+  
+  // 12초 동안 대기
+  await sleep(12000);
+  
+  console.log("12 seconds passed. Sending response.");
 
-  try {
-    const redis = new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN,
-    });
-
-    const cachedData = await redis.get('latest_recommendations');
-
-    if (!cachedData) {
-      return response.status(404).json({ error: 'Analyzed data not found. Please run the analysis script.' });
-    }
-
-    // 캐시된 데이터를 그대로 반환
-    response.setHeader('Content-Type', 'application/json');
-    return response.status(200).send(cachedData);
-
-  } catch (error) {
-    console.error('Themes API Error:', error);
-    return response.status(500).json({ error: 'Failed to fetch recommendations from cache.' });
-  }
+  // 12초 후 정상적인 응답 전송
+  response.status(200).json({
+    message: "Test successful after 12 seconds.",
+  });
 };
