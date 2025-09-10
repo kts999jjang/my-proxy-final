@@ -20,22 +20,38 @@ const kTickerInfo = {
   'NVDA': { name: 'NVIDIA Corp', keywords: ['nvidia', 'nvidia corp'], style: 'leading' }, 'MSFT': { name: 'Microsoft Corp', keywords: ['microsoft', 'microsoft corp'], style: 'leading' }, 'AI': { name: 'C3.ai, Inc.', keywords: ['c3.ai', 'c3 ai'], style: 'growth' }, 'PLTR': { name: 'Palantir Technologies', keywords: ['palantir', 'palantir technologies'], style: 'growth' }, 'AMD': { name: 'Advanced Micro Devices', keywords: ['amd', 'advanced micro devices'], style: 'growth' }, 'META': { name: 'Meta Platforms, Inc.', keywords: ['meta', 'meta platforms', 'facebook'], style: 'leading' }, 'AAPL': { name: 'Apple Inc.', keywords: ['apple', 'apple inc'], style: 'leading' }, 'RBLX': { name: 'Roblox Corporation', keywords: ['roblox'], style: 'growth' }, 'U': { name: 'Unity Software Inc.', keywords: ['unity', 'unity software'], style: 'growth' }, 'SNAP': { name: 'Snap Inc.', keywords: ['snap inc', 'snapchat'], style: 'growth' }, 'TSLA': { name: 'Tesla, Inc.', keywords: ['tesla'], style: 'leading' }, 'RIVN': { name: 'Rivian Automotive, Inc.', keywords: ['rivian', 'r1t', 'electric truck'], style: 'growth' }, 'LCID': { name: 'Lucid Group, Inc.', keywords: ['lucid', 'air', 'ev'], style: 'growth' }, 'GM': { name: 'General Motors Company', keywords: ['gm', 'general motors'], style: 'leading' }, 'F': { name: 'Ford Motor Company', keywords: ['ford'], style: 'leading' }, 'AMZN': { name: 'Amazon.com, Inc.', keywords: ['amazon', 'amazon.com'], style: 'leading' }, 'GOOGL': { name: 'Alphabet Inc.', keywords: ['alphabet', 'google'], style: 'leading' }, 'SNOW': { name: 'Snowflake Inc.', keywords: ['snowflake', 'data cloud'], style: 'growth' }, 'CRWD': { name: 'CrowdStrike Holdings', keywords: ['crowdstrike', 'cybersecurity'], style: 'growth' }, 'MRNA': { name: 'Moderna, Inc.', keywords: ['moderna'], style: 'growth' }, 'PFE': { name: 'Pfizer Inc.', keywords: ['pfizer'], style: 'leading' }, 'DIS': { name: 'The Walt Disney Company', keywords: ['disney'], style: 'leading' }, 'NFLX': { name: 'Netflix, Inc.', keywords: ['netflix'], style: 'leading' }
 };
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function getTickerForCompanyName(companyName, redis) {
     const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
     const cachedTicker = await redis.get(cleanedName);
     if (cachedTicker) { return cachedTicker; }
+
     const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
     if (!apiKey) throw new Error('ALPHA_VANTAGE_API_KEY is not set.');
+
     const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${cleanedName}&apikey=${apiKey}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    const bestMatch = data?.bestMatches?.[0];
-    if (bestMatch && parseFloat(bestMatch['9. matchScore']) > 0.7) {
-        const ticker = bestMatch['1. symbol'];
-        await redis.set(cleanedName, ticker, { ex: 60 * 60 * 24 * 7 });
-        return ticker;
+    
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.Note) {
+            console.warn(`Alpha Vantage API limit likely reached for "${cleanedName}". Note: ${data.Note}`);
+            return null;
+        }
+
+        const bestMatch = data?.bestMatches?.[0];
+        if (bestMatch && parseFloat(bestMatch['9. matchScore']) > 0.7) {
+            const ticker = bestMatch['1. symbol'];
+            await redis.set(cleanedName, ticker, { ex: 60 * 60 * 24 * 7 });
+            return ticker;
+        }
+        return null;
+    } catch (e) {
+        console.error(`Error fetching ticker for "${cleanedName}". Reason: ${e.message}`);
+        return null;
     }
-    return null;
 }
 
 // --- 메인 실행 함수 ---
@@ -43,7 +59,7 @@ async function main() {
     console.log("백그라운드 분석 및 데이터 저장을 시작합니다...");
 
     const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 14); // 14일치 데이터 기준
+    fromDate.setDate(fromDate.getDate() - 14);
 
     const pinecone = new Pinecone();
     const index = pinecone.index('gcp-starter-gemini');
@@ -61,21 +77,37 @@ async function main() {
         console.log(`\n'${themeName}' 테마 분석 중...`);
         const themeData = kInvestmentThemes[themeName];
         if (!themeData) continue;
-
-        // 1. 뉴스 요약 및 Pinecone 검색
-        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=50&from=${fromDate.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
-        const latestNewsResponse = await fetch(gnewsUrl);
-        const latestNews = await latestNewsResponse.json();
-        if (!latestNews.articles || latestNews.articles.length === 0) {
-            console.log(`  - 뉴스를 찾을 수 없습니다.`);
-            continue;
-        }
         
-        const headlines = latestNews.articles.map(a => a.title).join('\n');
-        const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
-        const result = await geminiModel.generateContent(prompt);
-        const themeSentence = result.response.text();
-        console.log(`  - 트렌드 요약 완료.`);
+        let themeSentence;
+        let retries = 3;
+        while (retries > 0) {
+            try {
+                const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=50&from=${fromDate.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
+                const latestNewsResponse = await fetch(gnewsUrl);
+                const latestNews = await latestNewsResponse.json();
+                if (!latestNews.articles || latestNews.articles.length === 0) {
+                    console.log(`  - 뉴스를 찾을 수 없습니다.`);
+                    themeSentence = null;
+                    break; 
+                }
+                
+                const headlines = latestNews.articles.map(a => a.title).join('\n');
+                const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
+                const result = await geminiModel.generateContent(prompt);
+                themeSentence = result.response.text();
+                console.log(`  - 트렌드 요약 완료.`);
+                break;
+            } catch (e) {
+                retries--;
+                console.warn(`  - Gemini 요약 API 오류 발생. ${retries > 0 ? `${retries}번 더 재시도합니다...` : '재시도 모두 실패.'} (오류: ${e.message})`);
+                if (retries === 0) {
+                    themeSentence = null;
+                }
+                await sleep(5000);
+            }
+        }
+
+        if (!themeSentence) continue;
 
         const embeddingResult = await embeddingModel.embedContent(themeSentence);
         const queryVector = embeddingResult.embedding.values;
@@ -104,13 +136,13 @@ async function main() {
         });
 
         const themeTickerScores = {};
-        const tickerPromises = Object.keys(organizationCounts).map(async (orgName) => {
+        for (const orgName of Object.keys(organizationCounts)) {
             const ticker = await getTickerForCompanyName(orgName, redis);
             if (ticker) {
                 themeTickerScores[ticker] = (themeTickerScores[ticker] || 0) + organizationCounts[orgName];
             }
-        });
-        await Promise.all(tickerPromises);
+            await sleep(15000);
+        }
 
         if (Object.keys(themeTickerScores).length === 0) {
             console.log(`  - 유효한 주식 티커를 찾을 수 없습니다.`);
