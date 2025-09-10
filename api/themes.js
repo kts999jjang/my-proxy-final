@@ -1,5 +1,3 @@
-// my-proxy-final/api/themes.js
-
 const { Redis } = require('@upstash/redis');
 
 module.exports = async (request, response) => {
@@ -19,7 +17,6 @@ module.exports = async (request, response) => {
       return response.status(404).json({ error: 'Analyzed data not found. Please run the analysis script.' });
     }
 
-    // 캐시된 데이터를 그대로 반환
     response.setHeader('Content-Type', 'application/json');
     return response.status(200).send(cachedData);
 
