@@ -8,6 +8,7 @@
     "compromise": "^14.13.0",
     "dotenv": "^17.2.1",
     "node-fetch": "^2.6.7",
-    "openai": "^4.52.0"
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
   }
 }
