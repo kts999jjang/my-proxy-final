@@ -9,7 +9,7 @@ const { Redis } = require('@upstash/redis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 10000; // Render는 10000 포트를 사용합니다
 
 app.use(cors());
 app.use(express.json());
@@ -72,6 +72,7 @@ function calculateRSI(data, period = 14) {
 
 // '/api/themes' 경로: Redis에서 미리 분석된 종목 목록을 반환
 app.get('/api/themes', async (req, res) => {
+  console.log("Received request for /api/themes");
   try {
     const redis = new Redis({
       url: process.env.UPSTASH_REDIS_REST_URL,
@@ -79,8 +80,11 @@ app.get('/api/themes', async (req, res) => {
     });
     const cachedData = await redis.get('latest_recommendations');
     if (!cachedData) {
+      console.error("No cached data found in Redis for 'latest_recommendations'");
       return res.status(404).json({ error: 'Analyzed data not found. Please run the analysis script.' });
     }
+    
+    // Redis에서 가져온 데이터가 문자열이므로, 객체로 다시 파싱해서 보내줍니다.
     return res.status(200).json(JSON.parse(cachedData));
   } catch (error) {
     console.error('Themes API Error:', error);
@@ -90,6 +94,7 @@ app.get('/api/themes', async (req, res) => {
 
 // '/api/details' 경로: 특정 종목의 상세 정보를 실시간으로 조회
 app.get('/api/details', async (req, res) => {
+  console.log(`Received request for /api/details with ticker: ${req.query.ticker}`);
   try {
     const { ticker, theme } = req.query;
     if (!ticker) { return res.status(400).json({ error: 'Ticker is required' }); }
