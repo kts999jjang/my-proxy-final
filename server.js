@@ -84,9 +84,8 @@ app.get('/api/themes', async (req, res) => {
       return res.status(404).json({ error: 'Analyzed data not found. Please run the analysis script.' });
     }
     
-    // ✨ 여기가 수정된 부분입니다.
-    // Redis에서 가져온 데이터가 문자열이므로, 객체로 다시 파싱해서 보내줍니다.
-    return res.status(200).json(JSON.parse(cachedData));
+    // ✨ 여기가 수정된 부분입니다. 불필요한 JSON.parse()를 제거했습니다.
+    return res.status(200).json(cachedData);
     
   } catch (error) {
     console.error('Themes API Error:', error);
