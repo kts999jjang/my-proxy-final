@@ -7,9 +7,10 @@ const fetch = require('node-fetch');
 const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const nlp = require('compromise'); // ✨ FIX: nlp 라이브러리 선언 추가
 
 const app = express();
-const PORT = process.env.PORT || 10000; // Render는 10000 포트를 사용합니다
+const PORT = process.env.PORT || 10000;
 
 app.use(cors());
 app.use(express.json());
@@ -80,11 +81,9 @@ app.get('/api/themes', async (req, res) => {
     });
     const cachedData = await redis.get('latest_recommendations');
     if (!cachedData) {
-      console.error("No cached data found in Redis for 'latest_recommendations'");
       return res.status(404).json({ error: 'Analyzed data not found. Please run the analysis script.' });
     }
     
-    // ✨ 여기가 수정된 부분입니다. 불필요한 JSON.parse()를 제거했습니다.
     return res.status(200).json(cachedData);
     
   } catch (error) {
