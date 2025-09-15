@@ -81,9 +81,10 @@ app.get('/api/themes', async (req, res) => {
     const cachedData = await redis.get('latest_recommendations');
     if (!cachedData) {
       console.error("No cached data found in Redis for 'latest_recommendations'");
-      return res.status(444).json({ error: 'Analyzed data not found. Please run the analysis script.' });
+      return res.status(404).json({ error: 'Analyzed data not found. Please run the analysis script.' });
     }
     
+    // ✨ 여기가 수정된 부분입니다.
     // Redis에서 가져온 데이터가 문자열이므로, 객체로 다시 파싱해서 보내줍니다.
     return res.status(200).json(JSON.parse(cachedData));
     
