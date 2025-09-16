@@ -41,6 +41,29 @@ async function getTickerForCompanyName(companyName, redis) {
     }
 }
 
+/**
+ * 기사 제목의 감성을 분석하여 점수를 반환하는 함수
+ * @param {object} model - Gemini 모델 인스턴스
+ * @param {string} title - 분석할 기사 제목
+ * @returns {Promise<number>} 감성 점수 (긍정: 1.5, 중립: 1.0, 부정: 0.2)
+ */
+async function calculateSentimentScore(model, title) {
+    try {
+        const prompt = `Analyze the sentiment of the following news headline. Respond with only one word: POSITIVE, NEUTRAL, or NEGATIVE.\n\nHeadline: "${title}"`;
+        const result = await model.generateContent(prompt);
+        const sentiment = result.response.text().trim().toUpperCase();
+
+        if (sentiment.includes('POSITIVE')) return 1.5;
+        if (sentiment.includes('NEGATIVE')) return 0.2; // 부정적일 경우 점수를 매우 낮게 부여
+        return 1.0; // 중립적이거나 판단이 어려울 경우 기본 점수
+    } catch (e) {
+        console.warn(`  - 감성 분석 중 오류 발생: ${e.message}. 기본 점수(1.0)를 사용합니다.`);
+        // API 오류 발생 시 분석 흐름이 끊기지 않도록 기본 점수 반환
+        return 1.0;
+    }
+}
+
+
 // --- 메인 실행 함수 ---
 async function main() {
     console.log("백그라운드 분석 및 데이터 저장을 시작합니다...");
@@ -112,15 +135,16 @@ async function main() {
 
         // 2. 종목 점수 계산
         const organizationCounts = {};
-        allFoundArticles.forEach(article => {
+        for (const article of allFoundArticles) {
+            const sentimentScore = await calculateSentimentScore(geminiModel, article.title);
             const doc = nlp(article.title);
             doc.organizations().out('array').forEach(org => {
                 const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
                 if (orgName.length > 1) {
-                    organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1;
+                    organizationCounts[orgName] = (organizationCounts[orgName] || 0) + sentimentScore;
                 }
             });
-        });
+        }
 
         const themeTickerScores = {};
         const unknownOrgs = [];
