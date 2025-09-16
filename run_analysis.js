@@ -155,13 +155,17 @@ async function main() {
 
         // 2. 종목 점수 계산
         const organizationCounts = {};
+        const orgToArticlesMap = new Map(); // ✨ FIX: 기관별 기사 및 감성점수 매핑
+
         for (const article of allFoundArticles) {
             const sentimentScore = await calculateSentimentScore(geminiModel, article.title);
             const doc = nlp(article.title);
             doc.organizations().out('array').forEach(org => {
                 const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-                if (orgName.length > 1) {
+                if (orgName.length > 1 && orgName !== 'ai' && !orgName.includes('c3')) { // ✨ FIX: 'c3' 포함 단어 필터링 강화
                     organizationCounts[orgName] = (organizationCounts[orgName] || 0) + sentimentScore;
+                    if (!orgToArticlesMap.has(orgName)) orgToArticlesMap.set(orgName, []);
+                    orgToArticlesMap.get(orgName).push({ title: article.title, sentiment: sentimentScore });
                 }
             });
         }
@@ -173,7 +177,7 @@ async function main() {
         for (const [orgName, count] of Object.entries(organizationCounts)) {
             let foundTicker = null;
             for (const [ticker, info] of Object.entries(kTickerInfo)) {
-                if (info.keywords.some(kw => orgName.includes(kw))) {
+                if (info.keywords.some(kw => orgName.toLowerCase().includes(kw))) {
                     foundTicker = ticker;
                     break;
                 }
@@ -190,9 +194,11 @@ async function main() {
         console.log(`  - ${unknownOrgs.length}개의 새로운 회사 티커를 조회합니다...`);
         const topUnknownOrgs = unknownOrgs.sort((a, b) => organizationCounts[b] - organizationCounts[a]).slice(0, 5);
         for (const orgName of topUnknownOrgs) {
-            const newTicker = await getTickerForCompanyName(orgName, redis);
-            if (newTicker) {
-                themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
+            if (!Object.values(kTickerInfo).some(info => info.keywords.some(kw => orgName.includes(kw)))) {
+                const newTicker = await getTickerForCompanyName(orgName, redis);
+                if (newTicker) {
+                    themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
+                }
             }
         }
 
@@ -208,9 +214,16 @@ async function main() {
                 score *= marketCapBonus;
             }
 
-            // 감성 점수 가중치: 긍정적인 기사가 많을수록 보너스
-            const articles = Object.values(orgArticles).flat().filter(a => a.title.toLowerCase().includes(ticker.toLowerCase()));
-            const avgSentiment = articles.reduce((sum, a) => sum + a.sentiment, 0) / (articles.length || 1);
+            // ✨ FIX: 올바른 감성 점수 가중치 계산
+            const companyKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
+            let totalSentiment = 0;
+            let articleCount = 0;
+            for (const [orgName, articles] of orgToArticlesMap.entries()) {
+                if (companyKeywords.some(kw => orgName.includes(kw))) {
+                    articles.forEach(article => { totalSentiment += article.sentiment; articleCount++; });
+                }
+            }
+            const avgSentiment = articleCount > 0 ? totalSentiment / articleCount : 1.0;
             score *= avgSentiment; // 평균 감성 점수를 곱함
 
             finalScores[ticker] = score;
