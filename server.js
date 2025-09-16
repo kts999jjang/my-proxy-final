@@ -8,6 +8,7 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const nlp = require('compromise'); // ✨ FIX: nlp 라이브러리 선언 추가
+const { kTickerInfo } = require('./constants');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
