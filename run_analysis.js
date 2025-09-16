@@ -241,13 +241,31 @@ async function main() {
         console.log(`  - ${Object.keys(finalScores).length}개의 종목 점수 계산 완료.`);
 
         // 3. 테마별 추천 종목 선정
-        const sortedTickers = Object.entries(finalScores).sort(([,a],[,b]) => b-a);
-        const leadingStocks = sortedTickers.filter(([t]) => kTickerInfo[t]?.style === 'leading').slice(0, 5).map(([t]) => ({ticker: t, companyName: kTickerInfo[t]?.name || t}));
-        const growthStocks = sortedTickers.filter(([t]) => kTickerInfo[t]?.style === 'growth').slice(0, 5).map(([t]) => ({ticker: t, companyName: kTickerInfo[t]?.name || t}));
+        const SCORE_THRESHOLD = 5.0; // 이 점수 이상일 때만 추천
+        const recommendedStocks = [];
+        const sortedTickers = Object.entries(finalScores).sort(([, a], [, b]) => b - a);
+
+        for (const [ticker, score] of sortedTickers) {
+            if (score > SCORE_THRESHOLD) {
+                const companyName = kTickerInfo[ticker]?.name || ticker;
+                // 추천 이유 생성을 위해 데이터 재계산 (이 부분은 최적화 여지가 있습니다)
+                const marketCap = await getMarketCap(ticker); 
+                const baseScore = Object.entries(organizationCounts).find(([orgName]) => (kTickerInfo[ticker]?.keywords || []).some(kw => orgName.includes(kw)))?.[1] || 1;
+                const avgSentiment = score / baseScore / (1 + (1 - Math.min(marketCap || 500e9, 500e9) / 500e9) * 0.5);
+                const reason = await generateRecommendationReason(geminiModel, ticker, companyName, score, marketCap, avgSentiment);
+                
+                recommendedStocks.push({
+                    ticker: ticker,
+                    companyName: companyName,
+                    reason: reason,
+                    score: score.toFixed(2)
+                });
+            }
+        }
         
-        if (leadingStocks.length > 0 || growthStocks.length > 0) {
-            finalResults[themeName] = { leading: leadingStocks, growth: growthStocks };
-            console.log(`  - 주도주: ${leadingStocks.length}개, 성장주: ${growthStocks.length}개 선정.`);
+        if (recommendedStocks.length > 0) {
+            finalResults[themeName] = { recommendations: recommendedStocks }; // 새로운 추천 포맷
+            console.log(`  - ${recommendedStocks.length}개의 추천 종목 선정 완료.`);
         }
     }
 
