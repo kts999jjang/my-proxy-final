@@ -156,13 +156,16 @@ async function main() {
         // 2. 종목 점수 계산
         const organizationCounts = {};
         const orgToArticlesMap = new Map(); // ✨ FIX: 기관별 기사 및 감성점수 매핑
+        // 'ai', 'inc' 등 회사 이름으로 잘못 인식될 수 있는 일반 단어 목록
+        const BANNED_ORG_NAMES = new Set(['ai', 'inc', 'corp', 'llc', 'ltd', 'group', 'co', 'tech', 'solutions']);
 
         for (const article of allFoundArticles) {
             const sentimentScore = await calculateSentimentScore(geminiModel, article.title);
             const doc = nlp(article.title);
             doc.organizations().out('array').forEach(org => {
                 const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-                if (orgName.length > 1 && orgName !== 'ai' && !orgName.includes('c3')) { // ✨ FIX: 'c3' 포함 단어 필터링 강화
+                // 길이가 1~2자인 약어이거나, 일반 단어 목록에 포함되지 않은 경우에만 점수 계산
+                if (orgName.length > 2 && !BANNED_ORG_NAMES.has(orgName)) {
                     organizationCounts[orgName] = (organizationCounts[orgName] || 0) + sentimentScore;
                     if (!orgToArticlesMap.has(orgName)) orgToArticlesMap.set(orgName, []);
                     orgToArticlesMap.get(orgName).push({ title: article.title, sentiment: sentimentScore });
@@ -175,6 +178,7 @@ async function main() {
 
         // 1. kTickerInfo에 정의된 종목인지 먼저 확인
         for (const [orgName, count] of Object.entries(organizationCounts)) {
+            // kTickerInfo의 keywords와 매칭되는지 명시적으로 확인
             let foundTicker = null;
             for (const [ticker, info] of Object.entries(kTickerInfo)) {
                 if (info.keywords.some(kw => orgName.toLowerCase().includes(kw))) {
@@ -206,7 +210,7 @@ async function main() {
         const finalScores = {};
         for (const [ticker, baseScore] of Object.entries(themeTickerScores)) {
             const marketCap = await getMarketCap(ticker);
-            let score = baseScore;
+            let score = parseFloat(baseScore);
 
             // 시가총액 가중치: 작을수록 높은 보너스 (최대 50%)
             if (marketCap && marketCap < 500 * 1000 * 1000 * 1000) { // 5000억 달러 미만
@@ -227,14 +231,14 @@ async function main() {
             score *= avgSentiment; // 평균 감성 점수를 곱함
 
             finalScores[ticker] = score;
-            console.log(`  - [${ticker}] 최종 점수: ${score.toFixed(2)} (기본: ${baseScore}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'}, 감성: ${avgSentiment.toFixed(2)})`);
+            console.log(`  - [${ticker}] 최종 점수: ${score.toFixed(2)} (기본: ${baseScore.toFixed(2)}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'}, 감성: ${avgSentiment.toFixed(2)})`);
         }
 
-        if (Object.keys(themeTickerScores).length === 0) {
+        if (Object.keys(finalScores).length === 0) {
             console.log(`  - 유효한 주식 티커를 찾을 수 없습니다.`);
             continue;
         }
-        console.log(`  - ${Object.keys(themeTickerScores).length}개의 종목 점수 계산 완료.`);
+        console.log(`  - ${Object.keys(finalScores).length}개의 종목 점수 계산 완료.`);
 
         // 3. 테마별 추천 종목 선정
         const sortedTickers = Object.entries(finalScores).sort(([,a],[,b]) => b-a);
