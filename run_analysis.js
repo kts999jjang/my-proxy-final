@@ -107,51 +107,27 @@ async function main() {
         console.log(`\n'${themeName}' 테마 분석 중...`);
         const themeData = kInvestmentThemes[themeName];
         if (!themeData) continue;
-        
-        let themeSentence;
-        let retries = 3;
-        while (retries > 0) {
-            try {
-                const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=50&from=${fromDate.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
-                const latestNewsResponse = await fetch(gnewsUrl);
-                const latestNews = await latestNewsResponse.json();
-                if (!latestNews.articles || latestNews.articles.length === 0) {
-                    console.log(`  - 뉴스를 찾을 수 없습니다.`);
-                    themeSentence = null;
-                    break; 
-                }
-                
-                const headlines = latestNews.articles.map(a => a.title).join('\n');
-                const prompt = `Summarize the key trend within the '${themeName}' theme from these headlines in one objective sentence:\n\n${headlines}`;
-                const result = await geminiModel.generateContent(prompt);
-                themeSentence = result.response.text();
-                console.log(`  - 트렌드 요약 완료.`);
-                break;
-            } catch (e) {
-                retries--;
-                console.warn(`  - Gemini 요약 API 오류 발생. ${retries > 0 ? `${retries}번 더 재시도합니다...` : '재시도 모두 실패.'} (오류: ${e.message})`);
-                if (retries === 0) {
-                    themeSentence = null;
-                }
-                await sleep(5000);
-            }
-        }
 
-        if (!themeSentence) continue;
-
-        const embeddingResult = await embeddingModel.embedContent(themeSentence);
+        // 1. 테마 쿼리 자체를 직접 임베딩하여 관련 기사 검색 (요약 단계 삭제)
+        console.log(`  - '${themeName}' 테마 쿼리를 임베딩하여 관련 기사를 검색합니다.`);
+        const embeddingResult = await embeddingModel.embedContent({
+            content: { parts: [{ text: themeData.query }] },
+            taskType: "RETRIEVAL_QUERY",
+        });
         const queryVector = embeddingResult.embedding.values;
-        
+
+        // 분석할 기사 수를 500개로 늘림
         const queryResult = await index.query({ 
-            topK: 200, vector: queryVector, includeMetadata: true,
+            topK: 500, vector: queryVector, includeMetadata: true,
             filter: { "publishedAt": { "$gte": fromDate.getTime() / 1000 } }
         });
+
         const allFoundArticles = queryResult.matches.map(match => match.metadata);
         if (allFoundArticles.length === 0) {
             console.log(`  - 관련 기사를 찾을 수 없습니다.`);
             continue;
         }
-        console.log(`  - Pinecone에서 ${allFoundArticles.length}개의 관련 기사 발견.`);
+        console.log(`  - Pinecone에서 ${allFoundArticles.length}개의 관련 기사를 분석합니다.`);
 
         // 2. 종목 점수 계산
         const organizationCounts = {};
@@ -159,19 +135,24 @@ async function main() {
         // 'ai', 'inc' 등 회사 이름으로 잘못 인식될 수 있는 일반 단어 목록
         const BANNED_ORG_NAMES = new Set(['ai', 'inc', 'corp', 'llc', 'ltd', 'group', 'co', 'tech', 'solutions']);
 
-        for (const article of allFoundArticles) {
-            const sentimentScore = await calculateSentimentScore(geminiModel, article.title);
+        // ✨ FIX: 감성 분석을 병렬로 처리하여 시간 단축
+        const sentimentPromises = allFoundArticles.map(article => calculateSentimentScore(geminiModel, article.title));
+        const sentimentScores = await Promise.all(sentimentPromises);
+
+        allFoundArticles.forEach((article, index) => {
+            const sentimentScore = sentimentScores[index];
             const doc = nlp(article.title);
             doc.organizations().out('array').forEach(org => {
                 const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
                 // 길이가 1~2자인 약어이거나, 일반 단어 목록에 포함되지 않은 경우에만 점수 계산
                 if (orgName.length > 2 && !BANNED_ORG_NAMES.has(orgName)) {
-                    organizationCounts[orgName] = (organizationCounts[orgName] || 0) + sentimentScore;
-                    if (!orgToArticlesMap.has(orgName)) orgToArticlesMap.set(orgName, []);
-                    orgToArticlesMap.get(orgName).push({ title: article.title, sentiment: sentimentScore });
+                    organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1; // 기본 언급 횟수
+                    if (!orgToArticlesMap.has(orgName)) orgToArticlesMap.set(orgName, { totalSentiment: 0, count: 0 });
+                    orgToArticlesMap.get(orgName).totalSentiment += sentimentScore;
+                    orgToArticlesMap.get(orgName).count++;
                 }
             });
-        }
+        });
 
         const themeTickerScores = {};
         const unknownOrgs = [];
@@ -181,7 +162,7 @@ async function main() {
             // kTickerInfo의 keywords와 매칭되는지 명시적으로 확인
             let foundTicker = null;
             for (const [ticker, info] of Object.entries(kTickerInfo)) {
-                if (info.keywords.some(kw => orgName.toLowerCase().includes(kw))) {
+                if (info.keywords.some(kw => orgName.includes(kw))) {
                     foundTicker = ticker;
                     break;
                 }
@@ -207,9 +188,16 @@ async function main() {
         }
 
         // 2.5. 시가총액 및 감성 점수를 이용한 최종 점수 보정
-        const finalScores = {};
-        for (const [ticker, baseScore] of Object.entries(themeTickerScores)) {
-            const marketCap = await getMarketCap(ticker);
+        const tickersToAnalyze = Object.keys(themeTickerScores);
+        const marketCapPromises = tickersToAnalyze.map(ticker => getMarketCap(ticker));
+        const marketCaps = await Promise.all(marketCapPromises);
+
+        const scoredStocks = [];
+        for (let i = 0; i < tickersToAnalyze.length; i++) {
+            const ticker = tickersToAnalyze[i];
+            const baseScore = themeTickerScores[ticker];
+            const marketCap = marketCaps[i];
+
             let score = parseFloat(baseScore);
 
             // 시가총액 가중치: 작을수록 높은 보너스 (최대 50%)
@@ -217,51 +205,43 @@ async function main() {
                 const marketCapBonus = 1 + (1 - Math.min(marketCap, 500e9) / 500e9) * 0.5;
                 score *= marketCapBonus;
             }
-
-            // ✨ FIX: 올바른 감성 점수 가중치 계산
+            
+            // ✨ FIX: 단순화되고 정확한 감성 점수 가중치 계산
             const companyKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-            let totalSentiment = 0;
-            let articleCount = 0;
-            for (const [orgName, articles] of orgToArticlesMap.entries()) {
+            let relevantSentimentSum = 0;
+            let relevantSentimentCount = 0;
+            for (const [orgName, sentimentData] of orgToArticlesMap.entries()) {
                 if (companyKeywords.some(kw => orgName.includes(kw))) {
-                    articles.forEach(article => { totalSentiment += article.sentiment; articleCount++; });
+                    relevantSentimentSum += sentimentData.totalSentiment;
+                    relevantSentimentCount += sentimentData.count;
                 }
             }
-            const avgSentiment = articleCount > 0 ? totalSentiment / articleCount : 1.0;
+            const avgSentiment = relevantSentimentCount > 0 ? relevantSentimentSum / relevantSentimentCount : 1.0;
             score *= avgSentiment; // 평균 감성 점수를 곱함
 
-            finalScores[ticker] = score;
-            console.log(`  - [${ticker}] 최종 점수: ${score.toFixed(2)} (기본: ${baseScore.toFixed(2)}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'}, 감성: ${avgSentiment.toFixed(2)})`);
+            console.log(`  - [${ticker}] 점수 계산 완료: ${score.toFixed(2)} (기본: ${baseScore}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'}, 감성: ${avgSentiment.toFixed(2)})`);
+            
+            scoredStocks.push({ ticker, score, companyName: kTickerInfo[ticker]?.name || ticker });
         }
 
-        if (Object.keys(finalScores).length === 0) {
+        if (scoredStocks.length === 0) {
             console.log(`  - 유효한 주식 티커를 찾을 수 없습니다.`);
             continue;
         }
-        console.log(`  - ${Object.keys(finalScores).length}개의 종목 점수 계산 완료.`);
+        console.log(`  - ${scoredStocks.length}개의 종목 점수 계산 완료.`);
 
         // 3. 테마별 추천 종목 선정
         const SCORE_THRESHOLD = 5.0; // 이 점수 이상일 때만 추천
-        const recommendedStocks = [];
-        const sortedTickers = Object.entries(finalScores).sort(([, a], [, b]) => b - a);
-
-        for (const [ticker, score] of sortedTickers) {
-            if (score > SCORE_THRESHOLD) {
-                const companyName = kTickerInfo[ticker]?.name || ticker;
-                // 추천 이유 생성을 위해 데이터 재계산 (이 부분은 최적화 여지가 있습니다)
-                const marketCap = await getMarketCap(ticker); 
-                const baseScore = Object.entries(organizationCounts).find(([orgName]) => (kTickerInfo[ticker]?.keywords || []).some(kw => orgName.includes(kw)))?.[1] || 1;
-                const avgSentiment = score / baseScore / (1 + (1 - Math.min(marketCap || 500e9, 500e9) / 500e9) * 0.5);
-                const reason = await generateRecommendationReason(geminiModel, ticker, companyName, score, marketCap, avgSentiment);
-                
-                recommendedStocks.push({
-                    ticker: ticker,
-                    companyName: companyName,
-                    reason: reason,
-                    score: score.toFixed(2)
-                });
-            }
-        }
+        const recommendedStocks = scoredStocks
+            .filter(stock => stock.score > SCORE_THRESHOLD)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 10) // 최대 10개까지만 추천
+            .map(stock => ({
+                ticker: stock.ticker,
+                companyName: stock.companyName,
+                reason: `뉴스 분석 결과 높은 점수(${stock.score.toFixed(2)})를 기록했습니다.`, // 간단한 추천 이유
+                score: stock.score.toFixed(2)
+            }));
         
         if (recommendedStocks.length > 0) {
             finalResults[themeName] = { recommendations: recommendedStocks }; // 새로운 추천 포맷
