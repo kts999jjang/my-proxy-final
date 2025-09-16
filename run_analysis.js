@@ -42,6 +42,26 @@ async function getTickerForCompanyName(companyName, redis) {
 }
 
 /**
+ * Alpha Vantage API를 사용해 시가총액을 조회하는 함수
+ * @param {string} ticker - 주식 티커
+ * @returns {Promise<number|null>} 시가총액 또는 null
+ */
+async function getMarketCap(ticker) {
+    const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+    if (!apiKey) return null;
+    const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${ticker}&apikey=${apiKey}`;
+    try {
+        await sleep(15000); // API 호출 제한 준수
+        const response = await fetch(url);
+        const data = await response.json();
+        const marketCap = data?.MarketCapitalization ? parseInt(data.MarketCapitalization, 10) : null;
+        return marketCap;
+    } catch (e) {
+        console.warn(`  - ${ticker}의 시가총액 조회 중 오류: ${e.message}`);
+        return null;
+    }
+}
+/**
  * 기사 제목의 감성을 분석하여 점수를 반환하는 함수
  * @param {object} model - Gemini 모델 인스턴스
  * @param {string} title - 분석할 기사 제목
@@ -170,10 +190,31 @@ async function main() {
         console.log(`  - ${unknownOrgs.length}개의 새로운 회사 티커를 조회합니다...`);
         const topUnknownOrgs = unknownOrgs.sort((a, b) => organizationCounts[b] - organizationCounts[a]).slice(0, 5);
         for (const orgName of topUnknownOrgs) {
-            const ticker = await getTickerForCompanyName(orgName, redis);
-            if (ticker) {
-                themeTickerScores[ticker] = (themeTickerScores[ticker] || 0) + organizationCounts[orgName];
+            const newTicker = await getTickerForCompanyName(orgName, redis);
+            if (newTicker) {
+                themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
             }
+        }
+
+        // 2.5. 시가총액 및 감성 점수를 이용한 최종 점수 보정
+        const finalScores = {};
+        for (const [ticker, baseScore] of Object.entries(themeTickerScores)) {
+            const marketCap = await getMarketCap(ticker);
+            let score = baseScore;
+
+            // 시가총액 가중치: 작을수록 높은 보너스 (최대 50%)
+            if (marketCap && marketCap < 500 * 1000 * 1000 * 1000) { // 5000억 달러 미만
+                const marketCapBonus = 1 + (1 - Math.min(marketCap, 500e9) / 500e9) * 0.5;
+                score *= marketCapBonus;
+            }
+
+            // 감성 점수 가중치: 긍정적인 기사가 많을수록 보너스
+            const articles = Object.values(orgArticles).flat().filter(a => a.title.toLowerCase().includes(ticker.toLowerCase()));
+            const avgSentiment = articles.reduce((sum, a) => sum + a.sentiment, 0) / (articles.length || 1);
+            score *= avgSentiment; // 평균 감성 점수를 곱함
+
+            finalScores[ticker] = score;
+            console.log(`  - [${ticker}] 최종 점수: ${score.toFixed(2)} (기본: ${baseScore}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'}, 감성: ${avgSentiment.toFixed(2)})`);
         }
 
         if (Object.keys(themeTickerScores).length === 0) {
@@ -183,7 +224,7 @@ async function main() {
         console.log(`  - ${Object.keys(themeTickerScores).length}개의 종목 점수 계산 완료.`);
 
         // 3. 테마별 추천 종목 선정
-        const sortedTickers = Object.entries(themeTickerScores).sort(([,a],[,b]) => b-a);
+        const sortedTickers = Object.entries(finalScores).sort(([,a],[,b]) => b-a);
         const leadingStocks = sortedTickers.filter(([t]) => kTickerInfo[t]?.style === 'leading').slice(0, 5).map(([t]) => ({ticker: t, companyName: kTickerInfo[t]?.name || t}));
         const growthStocks = sortedTickers.filter(([t]) => kTickerInfo[t]?.style === 'growth').slice(0, 5).map(([t]) => ({ticker: t, companyName: kTickerInfo[t]?.name || t}));
         
