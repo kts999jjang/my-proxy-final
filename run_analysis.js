@@ -236,15 +236,18 @@ async function main() {
                 });
             }
 
+            // STEP 7: Filter and categorize stocks into 'leading' and 'growth'
             const SCORE_THRESHOLD = 8.0; // 추천 기준 점수
-            const recommendedStocks = scoredStocks
+            const finalRecommendations = scoredStocks
                 .filter(stock => stock.score > SCORE_THRESHOLD)
                 .sort((a, b) => b.score - a.score)
                 .slice(0, 10);
             
-            if (recommendedStocks.length > 0) {
-                finalResults[themeName] = { recommendations: recommendedStocks }; // 새로운 추천 포맷
-                console.log(`  - ${recommendedStocks.length}개의 추천 종목 선정 완료.`);
+            if (finalRecommendations.length > 0) {
+                const leading = finalRecommendations.filter(s => kTickerInfo[s.ticker]?.style === 'leading');
+                const growth = finalRecommendations.filter(s => kTickerInfo[s.ticker]?.style !== 'leading');
+                finalResults[themeName] = { leading, growth };
+                console.log(`  - ${finalRecommendations.length}개의 추천 종목 선정 완료 (주도주: ${leading.length}, 성장주: ${growth.length}).`);
             }
         }
     } catch (error) {

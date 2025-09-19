@@ -19,17 +19,27 @@ app.use(express.json());
 // --- API 호출 및 계산 헬퍼 함수 ---
 async function fetchStockDataFromYahoo(ticker) {
   if (!ticker) return null;
+
+  // 1. SSRF 방지를 위해 ticker 포맷 검증 (알파벳 대문자, 숫자, 마침표(.)만 허용)
+  const validTickerRegex = /^[A-Z0-9.]+$/;
+  if (!validTickerRegex.test(ticker)) {
+    console.warn('Invalid ticker format detected: %s', ticker);
+    return null;
+  }
+
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=1mo&interval=1d`;
     const response = await fetch(url);
     if (!response.ok) {
-      console.warn(`Failed to fetch data for ticker: ${ticker}, Status: ${response.status}`);
+      // 2. 로그 출력 방식 수정
+      console.warn('Failed to fetch data for ticker: %s, Status: %s', ticker, response.status);
       return null;
     }
     const data = await response.json();
     return data?.chart?.result?.[0];
   } catch (error) {
-    console.error(`Error fetching data for ticker: ${ticker}`, error);
+    // 2. 로그 출력 방식 수정
+    console.error('Error fetching data for ticker: %s', ticker, error);
     return null;
   }
 }
