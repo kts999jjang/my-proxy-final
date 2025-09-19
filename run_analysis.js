@@ -150,33 +150,6 @@ async function getFinancialsMetric(ticker, metricName) {
 }
 
 /**
- * Finnhub API를 사용해 종목 뉴스의 감성 점수를 계산하는 함수
- * @param {string} ticker - 주식 티커
- * @returns {Promise<number>} 뉴스 감성 점수
- */
-async function getNewsSentimentScore(ticker) {
-    const url = `https://finnhub.io/api/v1/company-news-sentiment?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
-    try {
-        await sleep(1100); // API 호출 제한 준수
-        const response = await fetch(url);
-        const text = await response.text();
-        let data;
-        try {
-            data = JSON.parse(text);
-            // 'companyNewsScore'는 0-1 사이의 값. 이를 10점 만점으로 변환
-            const sentimentScore = (data?.companyNewsScore || 0) * 10;
-            return sentimentScore;
-        } catch (e) {
-            console.warn(`  - ${ticker}의 뉴스 감성 분석 API가 유효하지 않은 응답을 반환했습니다.`);
-            return 0;
-        }
-    } catch (e) {
-        console.warn(`  - ${ticker}의 뉴스 감성 분석 중 오류: ${e.message}`);
-        return 0;
-    }
-}
-
-/**
  * Finnhub API를 사용해 어닝 서프라이즈 정보를 조회하는 함수
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 어닝 서프라이즈 점수
@@ -193,6 +166,60 @@ async function getEarningsSurpriseScore(ticker) {
     } catch (e) {
         console.warn(`  - ${ticker}의 어닝 서프라이즈 조회 중 오류: ${e.message}`);
         return 0;
+    }
+}
+
+/**
+ * GNews 기사를 기반으로 로컬에서 뉴스 감성 점수를 계산하는 함수
+ * @param {string} ticker - 주식 티커
+ * @param {Array} allArticles - GNews에서 수집된 모든 기사 배열
+ * @param {Object} kTickerInfo - 티커 정보 객체
+ * @returns {number} 뉴스 감성 점수
+ */
+function analyzeLocalNewsSentiment(ticker, allArticles, kTickerInfo) {
+    const infoString = kTickerInfo[ticker];
+    if (!infoString) return 0;
+
+    try {
+        const info = JSON.parse(infoString);
+        const keywords = info.keywords || [ticker.toLowerCase()];
+        const relevantArticles = allArticles.filter(article => 
+            keywords.some(kw => article.title.toLowerCase().includes(kw))
+        );
+
+        if (relevantArticles.length === 0) return 5; // 중립 점수
+
+        const totalSentiment = relevantArticles.reduce((sum, article) => sum + (nlp(article.title).sentiment().score), 0);
+        return 5 + (totalSentiment / relevantArticles.length) * 5; // 0-10점 척도로 변환
+    } catch (e) {
+        return 5; // 파싱 실패 시 중립 점수
+    }
+}
+
+/**
+ * GNews 기사를 기반으로 로컬에서 뉴스 감성 점수를 계산하는 함수
+ * @param {string} ticker - 주식 티커
+ * @param {Array} allArticles - GNews에서 수집된 모든 기사 배열
+ * @param {Object} kTickerInfo - 티커 정보 객체
+ * @returns {number} 뉴스 감성 점수
+ */
+function analyzeLocalNewsSentiment(ticker, allArticles, kTickerInfo) {
+    const infoString = kTickerInfo[ticker];
+    if (!infoString) return 5; // 정보가 없으면 중립 점수
+
+    try {
+        const info = JSON.parse(infoString);
+        const keywords = info.keywords || [ticker.toLowerCase()];
+        const relevantArticles = allArticles.filter(article => 
+            keywords.some(kw => article.title.toLowerCase().includes(kw))
+        );
+
+        if (relevantArticles.length === 0) return 5; // 관련 기사가 없으면 중립 점수
+
+        const totalSentiment = relevantArticles.reduce((sum, article) => sum + (nlp(article.title).sentiment().score || 0), 0);
+        return 5 + (totalSentiment / relevantArticles.length) * 5; // 0-10점 척도로 변환 (기본 5점)
+    } catch (e) {
+        return 5; // 파싱 실패 시 중립 점수
     }
 }
 
@@ -332,8 +359,8 @@ async function main() {
                     themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + count; // 이제 'count'를 사용할 수 있습니다.
 
                     if (!kTickerInfo[newTicker]) {
-                        const newInfo = { name: companyInfo.companyName, style: 'growth', keywords: [orgName] };
-                        kTickerInfo[newTicker] = JSON.stringify(newInfo); // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 추가할 때 JSON 문자열로 통일
+                        const newInfo = { name: companyInfo.companyName, style: 'growth', keywords: [orgName.toLowerCase()] };
+                        kTickerInfo[newTicker] = JSON.stringify(newInfo);
                     }
                 }
             }
@@ -360,8 +387,7 @@ async function main() {
                 getInsiderSentimentScore(ticker),
                 getAnalystRatingScore(ticker),
                 getEarningsSurpriseScore(ticker),
-                getFinancialsScore(ticker),
-                getNewsSentimentScore(ticker)
+                getFinancialsScore(ticker)
             ]));
             const analysisResults = await Promise.all(analysisPromises);
 
@@ -369,14 +395,14 @@ async function main() {
             const scoredStocks = [];
             for (let i = 0; i < candidatesForAnalysis.length; i++) {
                 const { ticker, newsScore } = candidatesForAnalysis[i];
-                const [insiderScore, analystScore, surpriseScore, financialsScore, sentimentScore] = analysisResults[i];
+                const [insiderScore, analystScore, surpriseScore, financialsScore] = analysisResults[i];
                 const marketCap = marketCapCache.get(ticker); // 캐시에서 시가총액 조회
+                const sentimentScore = analyzeLocalNewsSentiment(ticker, allFoundArticles, kTickerInfo);
 
                 // 각 지표에 가중치를 부여하여 종합 점수 계산
                 const weights = { news: 0.15, insider: 0.25, analyst: 0.25, surprise: 0.15, financials: 0.1, sentiment: 0.1 };
-                let compositeScore = (newsScore * weights.news) + (insiderScore * weights.insider) + (analystScore * weights.analyst) + 
+                let compositeScore = (newsScore * weights.news) + (insiderScore * weights.insider) + (analystScore * weights.analyst) +
                                      (surpriseScore * weights.surprise) + (financialsScore * weights.financials) + (sentimentScore * weights.sentiment);
-                
                 // ✨ FIX: 시가총액 기준으로 스타일을 동적으로 결정하고 Redis에 저장
                 let style = 'growth'; // 기본값
                 // 시가총액이 낮을수록 보너스 점수 부여 (숨은 보석 찾기)
