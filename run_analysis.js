@@ -332,10 +332,8 @@ async function main() {
                     themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + count; // 이제 'count'를 사용할 수 있습니다.
 
                     if (!kTickerInfo[newTicker]) {
-                        themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
-                        // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 추가할 때 JSON 문자열로 통일
                         const newInfo = { name: companyInfo.companyName, style: 'growth', keywords: [orgName] };
-                        kTickerInfo[newTicker] = JSON.stringify(newInfo);
+                        kTickerInfo[newTicker] = JSON.stringify(newInfo); // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 추가할 때 JSON 문자열로 통일
                     }
                 }
             }
