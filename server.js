@@ -172,7 +172,7 @@ const getAdminDashboardHTML = () => `
             const stocks = await response.json();
             stocksTableBody.innerHTML = '';
             for (const ticker in stocks) {
-                const info = JSON.parse(stocks[ticker]); // JSON 문자열을 객체로 파싱
+                const info = JSON.parse(stocks[ticker] || '{}'); // JSON 문자열을 객체로 파싱, null일 경우 빈 객체로 처리
                 const row = document.createElement('tr');
                 row.innerHTML = \`
                     <td>\${ticker}</td>
