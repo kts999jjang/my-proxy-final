@@ -10,32 +10,29 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function getTickerForCompanyName(companyName, redis) {
     const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-    const cachedTicker = await redis.get(cleanedName);
-    if (cachedTicker) { return cachedTicker; }
+    const cachedResult = await redis.get(cleanedName);
+    if (cachedResult) { return JSON.parse(cachedResult); }
 
-    const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-    if (!apiKey) throw new Error('ALPHA_VANTAGE_API_KEY is not set.');
+    // ✨ FIX: Alpha Vantage 대신 Finnhub API로 변경
+    const apiKey = process.env.FINNHUB_API_KEY;
+    if (!apiKey) throw new Error('FINNHUB_API_KEY is not set.');
 
-    const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${cleanedName}&apikey=${apiKey}`;
+    const url = `https://finnhub.io/api/v1/search?q=${cleanedName}&token=${apiKey}`;
     
     try {
-        await sleep(15000); // Alpha Vantage API는 분당 5회 호출 제한이 있으므로 15초 대기
+        await sleep(1100); // Finnhub API 호출 제한 준수 (분당 60회)
         const response = await fetch(url);
         const data = await response.json();
 
-        if (data.Note) {
-            console.warn(`Alpha Vantage API limit likely reached for "${cleanedName}". Note: ${data.Note}`);
-            return null;
-        }
-
-        const bestMatch = data?.bestMatches?.[0];
-        if (bestMatch && parseFloat(bestMatch['9. matchScore']) > 0.7) {
-            const ticker = bestMatch['1. symbol'];
-            const companyName = bestMatch['2. name'];
+        // Finnhub는 가장 관련성 높은 결과를 첫 번째로 반환합니다.
+        const bestMatch = data?.result?.[0];
+        if (bestMatch && !bestMatch.symbol.includes('.')) { // .이 포함된 티커(예: BRK.B)는 제외하여 단순화
+            const ticker = bestMatch.symbol;
+            const companyName = bestMatch.description;
             // ✨ FIX: 티커와 회사명을 함께 객체로 캐싱
             const result = { ticker, companyName };
             await redis.set(cleanedName, JSON.stringify(result), { ex: 60 * 60 * 24 * 7 });
-            return ticker;
+            return result;
         }
         return null;
     } catch (e) {
@@ -50,14 +47,8 @@ async function getTickerForCompanyName(companyName, redis) {
  * @returns {Promise<number|null>} 시가총액 또는 null
  */
 async function getMarketCap(ticker) {
-    const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-    if (!apiKey) return null;
-    const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${ticker}&apikey=${apiKey}`;
     try {
-        await sleep(15000); // API 호출 제한 준수
-        const response = await fetch(url);
-        const data = await response.json();
-        const marketCap = data?.MarketCapitalization ? parseInt(data.MarketCapitalization, 10) : null;
+        const marketCap = await getFinancialsMetric(ticker, 'marketCapitalization');
         return marketCap;
     } catch (e) {
         console.warn(`  - ${ticker}의 시가총액 조회 중 오류: ${e.message}`);
@@ -111,25 +102,34 @@ async function getAnalystRatingScore(ticker) {
  * @returns {Promise<number>} 재무 점수
  */
 async function getFinancialsScore(ticker) {
-    const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
     try {
-        await sleep(1100); // API 호출 제한 준수
-        const metrics = (await (await fetch(url)).json())?.metric;
+        const pe = await getFinancialsMetric(ticker, 'peNormalizedAnnual');
+        const pb = await getFinancialsMetric(ticker, 'pbAnnual');
         let score = 0;
-        if (!metrics) return 0;
 
         // P/E 비율이 낮을수록 높은 점수 (30 미만일 때)
-        if (metrics.peNormalizedAnnual && metrics.peNormalizedAnnual < 30) {
-            score += (1 - metrics.peNormalizedAnnual / 30) * 5;
+        if (pe && pe < 30) {
+            score += (1 - pe / 30) * 5;
         }
         // P/B 비율이 낮을수록 높은 점수 (3 미만일 때)
-        if (metrics.pbAnnual && metrics.pbAnnual < 3) {
-            score += (1 - metrics.pbAnnual / 3) * 5;
+        if (pb && pb < 3) {
+            score += (1 - pb / 3) * 5;
         }
         return score;
     } catch (e) {
         console.warn(`  - ${ticker}의 재무 정보 조회 중 오류: ${e.message}`);
         return 0;
+    }
+}
+
+async function getFinancialsMetric(ticker, metricName) {
+    const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
+    try {
+        await sleep(1100); // API 호출 제한 준수
+        const metrics = (await (await fetch(url)).json())?.metric;
+        return metrics ? metrics[metricName] : null;
+    } catch (e) {
+        return null;
     }
 }
 
