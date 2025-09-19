@@ -326,42 +326,12 @@ async function main() {
             const themeTickerScores = {};
             const unknownOrgs = [];
 
-            // STEP 2: 추출된 기관명을 kTickerInfo와 매칭하여 티커 찾기
             // ✨ FIX: 모든 기관명에 대해 티커를 조회하고 점수를 집계
             for (const [orgName, count] of Object.entries(organizationCounts)) {
-                let foundTicker = null;
-                for (const [ticker, info] of Object.entries(kTickerInfo)) {
-                    try {
-                        const parsedInfo = JSON.parse(info); // ✨ FIX: info는 JSON 문자열이므로 파싱
-                        // ✨ FIX: info 객체와 info.keywords가 유효한지 확인하여 TypeError 방지
-                        if (parsedInfo && parsedInfo.keywords && parsedInfo.keywords.some(kw => orgName.includes(kw))) {
-                            foundTicker = ticker;
-                            break;
-                        }
-                    } catch (e) {
-                        // 파싱 실패는 이전 데이터 형식일 수 있으므로 무시
-                    }
-                }
-
-                if (foundTicker) {
-                    themeTickerScores[foundTicker] = (themeTickerScores[foundTicker] || 0) + count;
-                } else {
-                    unknownOrgs.push(orgName);
-                }
-            }
-
-            // ✨ FIX: Define unknownOrgsToQuery before using it
-            console.log(`  - ${unknownOrgs.length}개의 새로운 회사 티커를 조회합니다...`);
-            const unknownOrgsToQuery = unknownOrgs.map(orgName => ({ orgName, count: organizationCounts[orgName] }))
-                .sort((a, b) => b.count - a.count)
-                .slice(0, 10); // 상위 10개의 새로운 회사에 대해서만 티커 조회 (API 호출 제한)
-
-            for (const { orgName, count } of unknownOrgsToQuery) {
                 const companyInfo = await getTickerForCompanyName(orgName, redis);
-                // ✨ FIX: companyInfo가 null이 아닌지 확인
                 if (companyInfo && companyInfo.ticker) {
                     const newTicker = companyInfo.ticker;
-                    themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + count; // 이제 'count'를 사용할 수 있습니다.
+                    themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + count;
 
                     if (!kTickerInfo[newTicker]) {
                         const newInfo = { name: companyInfo.companyName, style: 'growth', keywords: [orgName.toLowerCase()] };
@@ -420,7 +390,7 @@ async function main() {
                     }
                     // Redis에 최신 정보 저장
                     // ✨ FIX: kTickerInfo에서 name을 안전하게 파싱하여 사용
-                    const existingInfo = kTickerInfo[ticker] ? JSON.parse(kTickerInfo[ticker]) : {};
+                    const existingInfo = kTickerInfo[ticker] ? JSON.parse(kTickerInfo[ticker]) : { name: ticker, keywords: [] };
                     const stockInfo = { name: existingInfo.name || ticker, style, keywords: existingInfo.keywords || [] };
                     await redis.hset('stock-info', { [ticker]: JSON.stringify(stockInfo) });
                     // 메모리에 있는 정보도 업데이트
