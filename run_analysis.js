@@ -178,33 +178,6 @@ async function getEarningsSurpriseScore(ticker) {
  */
 function analyzeLocalNewsSentiment(ticker, allArticles, kTickerInfo) {
     const infoString = kTickerInfo[ticker];
-    if (!infoString) return 0;
-
-    try {
-        const info = JSON.parse(infoString);
-        const keywords = info.keywords || [ticker.toLowerCase()];
-        const relevantArticles = allArticles.filter(article => 
-            keywords.some(kw => article.title.toLowerCase().includes(kw))
-        );
-
-        if (relevantArticles.length === 0) return 5; // 중립 점수
-
-        const totalSentiment = relevantArticles.reduce((sum, article) => sum + (nlp(article.title).sentiment().score), 0);
-        return 5 + (totalSentiment / relevantArticles.length) * 5; // 0-10점 척도로 변환
-    } catch (e) {
-        return 5; // 파싱 실패 시 중립 점수
-    }
-}
-
-/**
- * GNews 기사를 기반으로 로컬에서 뉴스 감성 점수를 계산하는 함수
- * @param {string} ticker - 주식 티커
- * @param {Array} allArticles - GNews에서 수집된 모든 기사 배열
- * @param {Object} kTickerInfo - 티커 정보 객체
- * @returns {number} 뉴스 감성 점수
- */
-function analyzeLocalNewsSentiment(ticker, allArticles, kTickerInfo) {
-    const infoString = kTickerInfo[ticker];
     if (!infoString) return 5; // 정보가 없으면 중립 점수
 
     try {
@@ -390,7 +363,19 @@ async function main() {
                     }
                     // Redis에 최신 정보 저장
                     // ✨ FIX: kTickerInfo에서 name을 안전하게 파싱하여 사용
-                    const existingInfo = kTickerInfo[ticker] ? JSON.parse(kTickerInfo[ticker]) : { name: ticker, keywords: [] };
+                    let existingInfo;
+                    const infoValue = kTickerInfo[ticker];
+                    if (typeof infoValue === 'string') {
+                        try {
+                            existingInfo = JSON.parse(infoValue);
+                        } catch (e) {
+                            console.error(`[DEBUG] Failed to parse kTickerInfo for ${ticker}. Value:`, infoValue);
+                            existingInfo = { name: ticker, keywords: [] };
+                        }
+                    } else {
+                        console.error(`[DEBUG] kTickerInfo for ${ticker} is not a string. Value:`, infoValue);
+                        existingInfo = { name: ticker, keywords: [] };
+                    }
                     const stockInfo = { name: existingInfo.name || ticker, style, keywords: existingInfo.keywords || [] };
                     await redis.hset('stock-info', { [ticker]: JSON.stringify(stockInfo) });
                     // 메모리에 있는 정보도 업데이트
