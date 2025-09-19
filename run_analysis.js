@@ -301,6 +301,12 @@ async function main() {
                 }
             }
 
+            // ✨ FIX: Define unknownOrgsToQuery before using it
+            console.log(`  - ${unknownOrgs.length}개의 새로운 회사 티커를 조회합니다...`);
+            const unknownOrgsToQuery = unknownOrgs
+                .sort((a, b) => organizationCounts[b] - organizationCounts[a])
+                .slice(0, 10); // 상위 10개의 새로운 회사에 대해서만 티커 조회 (API 호출 제한)
+
             for (const orgName of unknownOrgsToQuery) {
                 const companyInfo = await getTickerForCompanyName(orgName, redis);
                 // ✨ FIX: companyInfo가 null이 아닌지 확인
