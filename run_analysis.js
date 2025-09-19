@@ -10,8 +10,16 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function getTickerForCompanyName(companyName, redis) {
     const cleanedName = companyName.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
-    const cachedResult = await redis.get(cleanedName);
-    if (cachedResult) { return JSON.parse(cachedResult); }
+    const cachedData = await redis.get(cleanedName);
+    if (cachedData) {
+        try {
+            // ✨ FIX: 캐시된 데이터가 JSON 형식인지 확인하고 파싱
+            return JSON.parse(cachedData);
+        } catch (e) {
+            // JSON 파싱에 실패하면 과거 데이터(단순 문자열)로 간주하고, 해당 캐시를 삭제하여 다음 실행 시 갱신되도록 함
+            await redis.del(cleanedName);
+        }
+    }
 
     // ✨ FIX: Alpha Vantage 대신 Finnhub API로 변경
     const apiKey = process.env.FINNHUB_API_KEY;
