@@ -68,11 +68,7 @@ async function getMarketCap(ticker) {
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 내부자 거래 점수
  */
-async function getInsiderSentimentScore(ticker, redis) {
-    const cacheKey = `insider:${ticker}`;
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) return JSON.parse(cachedData);
-
+async function getInsiderSentimentScore(ticker) {
     const to = new Date().toISOString().split('T')[0];
     const from = new Date(new Date().setMonth(new Date().getMonth() - 3)).toISOString().split('T')[0];
     const url = `https://finnhub.io/api/v1/stock/insider-sentiment?symbol=${ticker}&from=${from}&to=${to}&token=${process.env.FINNHUB_API_KEY}`;
@@ -82,9 +78,7 @@ async function getInsiderSentimentScore(ticker, redis) {
         const data = await response.json();
         // 월별 순매수(mspr)가 0보다 큰 달의 수를 점수로 활용 (최근 3개월)
         const positiveMonths = data?.data?.filter(d => d.mspr > 0).length || 0;
-        const score = positiveMonths * 5; // 긍정적인 달 하나당 5점 부여
-        await redis.set(cacheKey, JSON.stringify(score), { ex: 60 * 60 * 12 }); // 12시간 캐시
-        return score;
+        return positiveMonths * 5; // 긍정적인 달 하나당 5점 부여
     } catch (e) {
         console.warn(`  - ${ticker}의 내부자 거래 조회 중 오류: ${e.message}`);
         return 0;
@@ -96,20 +90,14 @@ async function getInsiderSentimentScore(ticker, redis) {
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 애널리스트 추천 점수
  */
-async function getAnalystRatingScore(ticker, redis) {
-    const cacheKey = `analyst:${ticker}`;
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) return JSON.parse(cachedData);
-
+async function getAnalystRatingScore(ticker) {
     const url = `https://finnhub.io/api/v1/stock/recommendation?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
         const response = await fetch(url);
         const data = (await response.json())?.[0];
         // 'strongBuy'와 'buy'의 합을 점수로 활용
-        const score = (data?.strongBuy || 0) * 2 + (data?.buy || 0);
-        await redis.set(cacheKey, JSON.stringify(score), { ex: 60 * 60 * 12 }); // 12시간 캐시
-        return score;
+        return (data?.strongBuy || 0) * 2 + (data?.buy || 0);
     } catch (e) {
         console.warn(`  - ${ticker}의 애널리스트 평가 조회 중 오류: ${e.message}`);
         return 0;
@@ -121,11 +109,7 @@ async function getAnalystRatingScore(ticker, redis) {
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 재무 점수
  */
-async function getFinancialsScore(ticker, redis) {
-    const cacheKey = `financials:${ticker}`;
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) return JSON.parse(cachedData);
-
+async function getFinancialsScore(ticker) {
     try {
         const pe = await getFinancialsMetric(ticker, 'peNormalizedAnnual');
         const pb = await getFinancialsMetric(ticker, 'pbAnnual');
@@ -139,7 +123,6 @@ async function getFinancialsScore(ticker, redis) {
         if (pb && pb < 3) {
             score += (1 - pb / 3) * 5;
         }
-        await redis.set(cacheKey, JSON.stringify(score), { ex: 60 * 60 * 12 }); // 12시간 캐시
         return score;
     } catch (e) {
         console.warn(`  - ${ticker}의 재무 정보 조회 중 오류: ${e.message}`);
@@ -151,16 +134,8 @@ async function getFinancialsMetric(ticker, metricName) {
     const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
-        const response = await fetch(url);
-        const text = await response.text();
-        let data;
-        try {
-            data = JSON.parse(text);
-        } catch (e) {
-            console.warn(`  - ${ticker}의 재무 정보 API가 유효하지 않은 응답을 반환했습니다.`);
-            return null;
-        }
-        return data?.metric ? data.metric[metricName] : null;
+        const metrics = (await (await fetch(url)).json())?.metric;
+        return metrics ? metrics[metricName] : null;
     } catch (e) {
         return null;
     }
@@ -171,27 +146,14 @@ async function getFinancialsMetric(ticker, metricName) {
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 뉴스 감성 점수
  */
-async function getNewsSentimentScore(ticker, redis) {
-    const cacheKey = `sentiment:${ticker}`;
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) return JSON.parse(cachedData);
-
+async function getNewsSentimentScore(ticker) {
     const url = `https://finnhub.io/api/v1/company-news-sentiment?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
-        const response = await fetch(url);
-        const text = await response.text();
-        let data;
-        try {
-            data = JSON.parse(text);
-            // 'companyNewsScore'는 0-1 사이의 값. 이를 10점 만점으로 변환
-            const sentimentScore = (data?.companyNewsScore || 0) * 10;
-            await redis.set(cacheKey, JSON.stringify(sentimentScore), { ex: 60 * 60 * 12 }); // 12시간 캐시
-            return sentimentScore;
-        } catch (e) {
-            console.warn(`  - ${ticker}의 뉴스 감성 분석 API가 유효하지 않은 응답을 반환했습니다.`);
-            return 0;
-        }
+        const data = await (await fetch(url)).json();
+        // 'companyNewsScore'는 0-1 사이의 값. 이를 10점 만점으로 변환
+        const sentimentScore = (data?.companyNewsScore || 0) * 10;
+        return sentimentScore;
     } catch (e) {
         console.warn(`  - ${ticker}의 뉴스 감성 분석 중 오류: ${e.message}`);
         return 0;
@@ -203,11 +165,7 @@ async function getNewsSentimentScore(ticker, redis) {
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 어닝 서프라이즈 점수
  */
-async function getEarningsSurpriseScore(ticker, redis) {
-    const cacheKey = `earnings:${ticker}`;
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) return JSON.parse(cachedData);
-
+async function getEarningsSurpriseScore(ticker) {
     const url = `https://finnhub.io/api/v1/stock/earnings?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
@@ -215,9 +173,7 @@ async function getEarningsSurpriseScore(ticker, redis) {
         const data = await response.json();
         // 최근 4분기 동안 예상치를 상회한(positive surprise) 횟수를 점수로 활용
         const positiveSurprises = data?.filter(d => d.surprise > 0).length || 0;
-        const score = positiveSurprises * 2.5; // 분기당 2.5점 부여
-        await redis.set(cacheKey, JSON.stringify(score), { ex: 60 * 60 * 12 }); // 12시간 캐시
-        return score;
+        return positiveSurprises * 2.5; // 분기당 2.5점 부여
     } catch (e) {
         console.warn(`  - ${ticker}의 어닝 서프라이즈 조회 중 오류: ${e.message}`);
         return 0;
@@ -330,16 +286,11 @@ async function main() {
             // STEP 2: 추출된 기관명을 kTickerInfo와 매칭하여 티커 찾기
             for (const [orgName, count] of Object.entries(organizationCounts)) {
                 let foundTicker = null;
-                for (const [ticker, infoString] of Object.entries(kTickerInfo)) {
-                    try {
-                        const info = JSON.parse(infoString);
-                        // ✨ FIX: info 객체와 info.keywords가 유효한지 확인하여 TypeError 방지
-                        if (info && info.keywords && info.keywords.some(kw => orgName.includes(kw))) {
-                            foundTicker = ticker;
-                            break;
-                        }
-                    } catch(e) {
-                        // JSON 파싱 실패 시 무시하고 계속 진행
+                for (const [ticker, info] of Object.entries(kTickerInfo)) {
+                    // ✨ FIX: info 객체와 info.keywords가 유효한지 확인하여 TypeError 방지
+                    if (info && info.keywords && info.keywords.some(kw => orgName.includes(kw))) {
+                        foundTicker = ticker;
+                        break;
                     }
                 }
 
@@ -347,14 +298,6 @@ async function main() {
                     themeTickerScores[foundTicker] = (themeTickerScores[foundTicker] || 0) + count;
                 } else {
                     unknownOrgs.push(orgName);
-                }
-            }
-            
-            // ✨ FIX: Redis 캐시에 이미 있는 종목도 점수 집계에 포함
-            for (const [orgName, count] of Object.entries(organizationCounts)) {
-                const cachedInfo = await getTickerForCompanyName(orgName, redis);
-                if (cachedInfo && cachedInfo.ticker) {
-                    themeTickerScores[cachedInfo.ticker] = (themeTickerScores[cachedInfo.ticker] || 0) + count;
                 }
             }
 
@@ -371,7 +314,7 @@ async function main() {
                     const newTicker = companyInfo.ticker;
                     if (!kTickerInfo[newTicker]) {
                         themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
-                        // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 임시 추가 (분류를 위해)
+                        // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 추가할 때 JSON 문자열로 통일
                         const newInfo = { name: companyInfo.companyName, style: 'growth', keywords: [orgName] };
                         kTickerInfo[newTicker] = JSON.stringify(newInfo);
                     }
@@ -397,11 +340,11 @@ async function main() {
             // STEP 5: 내부자/애널리스트 점수만 병렬로 조회
             const tickersToAnalyze = candidatesForAnalysis.map(c => c.ticker);
             const analysisPromises = tickersToAnalyze.map(ticker => Promise.all([
-                getInsiderSentimentScore(ticker, redis),
-                getAnalystRatingScore(ticker, redis),
-                getEarningsSurpriseScore(ticker, redis),
-                getFinancialsScore(ticker, redis),
-                getNewsSentimentScore(ticker, redis)
+                getInsiderSentimentScore(ticker),
+                getAnalystRatingScore(ticker),
+                getEarningsSurpriseScore(ticker),
+                getFinancialsScore(ticker),
+                getNewsSentimentScore(ticker)
             ]));
             const analysisResults = await Promise.all(analysisPromises);
 
@@ -428,13 +371,10 @@ async function main() {
                         compositeScore += marketCapBonus;
                     }
                     // Redis에 최신 정보 저장
-                    // ✨ FIX: kTickerInfo에서 name을 안전하게 파싱하여 사용
-                    const existingInfo = kTickerInfo[ticker] ? JSON.parse(kTickerInfo[ticker]) : {};
-                    const stockInfo = { name: existingInfo.name || ticker, style, keywords: existingInfo.keywords || [] };
+                    const stockInfo = { name: kTickerInfo[ticker]?.name || ticker, style };
                     await redis.hset('stock-info', { [ticker]: JSON.stringify(stockInfo) });
-                    // 메모리에 있는 정보도 업데이트
-                    kTickerInfo[ticker] = JSON.stringify(stockInfo);
                 }
+                kTickerInfo[ticker].style = style; // 메모리에 있는 정보도 업데이트
 
                 console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스언급: ${newsScore}, 내부자: ${insiderScore}, 애널리스트: ${analystScore}, 서프라이즈: ${surpriseScore}, 재무: ${financialsScore.toFixed(1)}, 감성: ${sentimentScore.toFixed(1)}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'})`);
                 scoredStocks.push({ 
