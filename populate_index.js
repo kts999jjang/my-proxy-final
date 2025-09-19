@@ -47,7 +47,9 @@ async function main() {
         const response = await fetch(gnewsUrl);
         const data = await response.json();
         if (data.articles) {
-          allArticles.push(...data.articles);
+          // ✨ FIX: 각 기사에 테마 이름을 추가하여 저장
+          const articlesWithTheme = data.articles.map(article => ({ ...article, theme: themeName }));
+          allArticles.push(...articlesWithTheme);
           console.log(`  - '${themeName}' 테마 기사 ${data.articles.length}개 수집 완료.`);
         }
       } catch (e) {
@@ -76,7 +78,7 @@ async function main() {
           source: article.source.name,
           url: article.url,
           publishedAt: publishedAtTimestamp,
-          theme: themeName, // ✨ FIX 1: 메타데이터에 테마 이름 추가
+          theme: article.theme, // ✨ FIX: 기사에 저장된 테마 이름을 메타데이터로 사용
         },
       });
       
