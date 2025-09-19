@@ -134,8 +134,16 @@ async function getFinancialsMetric(ticker, metricName) {
     const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
-        const metrics = (await (await fetch(url)).json())?.metric;
-        return metrics ? metrics[metricName] : null;
+        const response = await fetch(url);
+        const text = await response.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            console.warn(`  - ${ticker}의 재무 정보 API가 유효하지 않은 응답을 반환했습니다.`);
+            return null;
+        }
+        return data?.metric ? data.metric[metricName] : null;
     } catch (e) {
         return null;
     }
@@ -150,10 +158,18 @@ async function getNewsSentimentScore(ticker) {
     const url = `https://finnhub.io/api/v1/company-news-sentiment?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
-        const data = await (await fetch(url)).json();
-        // 'companyNewsScore'는 0-1 사이의 값. 이를 10점 만점으로 변환
-        const sentimentScore = (data?.companyNewsScore || 0) * 10;
-        return sentimentScore;
+        const response = await fetch(url);
+        const text = await response.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+            // 'companyNewsScore'는 0-1 사이의 값. 이를 10점 만점으로 변환
+            const sentimentScore = (data?.companyNewsScore || 0) * 10;
+            return sentimentScore;
+        } catch (e) {
+            console.warn(`  - ${ticker}의 뉴스 감성 분석 API가 유효하지 않은 응답을 반환했습니다.`);
+            return 0;
+        }
     } catch (e) {
         console.warn(`  - ${ticker}의 뉴스 감성 분석 중 오류: ${e.message}`);
         return 0;
@@ -284,6 +300,7 @@ async function main() {
             const unknownOrgs = [];
 
             // STEP 2: 추출된 기관명을 kTickerInfo와 매칭하여 티커 찾기
+            // ✨ FIX: 모든 기관명에 대해 티커를 조회하고 점수를 집계
             for (const [orgName, count] of Object.entries(organizationCounts)) {
                 let foundTicker = null;
                 for (const [ticker, info] of Object.entries(kTickerInfo)) {
@@ -312,6 +329,8 @@ async function main() {
                 // ✨ FIX: companyInfo가 null이 아닌지 확인
                 if (companyInfo && companyInfo.ticker) {
                     const newTicker = companyInfo.ticker;
+                    themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + count;
+
                     if (!kTickerInfo[newTicker]) {
                         themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
                         // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 추가할 때 JSON 문자열로 통일
@@ -371,10 +390,13 @@ async function main() {
                         compositeScore += marketCapBonus;
                     }
                     // Redis에 최신 정보 저장
-                    const stockInfo = { name: kTickerInfo[ticker]?.name || ticker, style };
+                    // ✨ FIX: kTickerInfo에서 name을 안전하게 파싱하여 사용
+                    const existingInfo = kTickerInfo[ticker] ? JSON.parse(kTickerInfo[ticker]) : {};
+                    const stockInfo = { name: existingInfo.name || ticker, style, keywords: existingInfo.keywords || [] };
                     await redis.hset('stock-info', { [ticker]: JSON.stringify(stockInfo) });
+                    // 메모리에 있는 정보도 업데이트
+                    kTickerInfo[ticker] = JSON.stringify(stockInfo);
                 }
-                kTickerInfo[ticker].style = style; // 메모리에 있는 정보도 업데이트
 
                 console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스언급: ${newsScore}, 내부자: ${insiderScore}, 애널리스트: ${analystScore}, 서프라이즈: ${surpriseScore}, 재무: ${financialsScore.toFixed(1)}, 감성: ${sentimentScore.toFixed(1)}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'})`);
                 scoredStocks.push({ 
