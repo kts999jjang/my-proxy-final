@@ -83,6 +83,23 @@ async function calculateSentimentScore(model, title) {
     }
 }
 
+/**
+ * 데이터에 기반하여 주식 추천 이유를 생성하는 함수
+ * @param {object} model - Gemini 모델 인스턴스
+ * @param {string} ticker - 주식 티커
+ * @param {string} companyName - 회사 이름
+ * @param {number} score - 최종 계산 점수
+ * @param {number|null} marketCap - 시가총액
+ * @param {number} avgSentiment - 평균 뉴스 감성 점수
+ * @returns {Promise<string>} 간결한 추천 이유 문장
+ */
+async function generateRecommendationReason(model, ticker, companyName, score, marketCap, avgSentiment) {
+    // Rate-limit을 위해 이 함수 내에서는 sleep을 사용하지 않습니다. 호출하는 쪽에서 제어합니다.
+    const prompt = `In one short sentence, explain why ${companyName} (${ticker}) is a noteworthy stock to watch. Base the reason on the following data: a high recommendation score of ${score.toFixed(2)}, an average news sentiment score of ${avgSentiment.toFixed(2)} (where >1.0 is positive), and a market cap of ${marketCap ? `$${(marketCap / 1e9).toFixed(1)} billion` : 'N/A'}. Focus on the positive sentiment and its potential as a smaller-cap company if applicable.`;
+    const result = await model.generateContent(prompt);
+    return result.response.text().trim();
+}
+
 
 // --- 메인 실행 함수 ---
 async function main() {
@@ -136,8 +153,21 @@ async function main() {
         const BANNED_ORG_NAMES = new Set(['ai', 'inc', 'corp', 'llc', 'ltd', 'group', 'co', 'tech', 'solutions']);
 
         // ✨ FIX: 감성 분석을 병렬로 처리하여 시간 단축
-        const sentimentPromises = allFoundArticles.map(article => calculateSentimentScore(geminiModel, article.title));
-        const sentimentScores = await Promise.all(sentimentPromises);
+        console.log(`  - ${allFoundArticles.length}개 기사의 감성 분석을 시작합니다 (Rate Limit 준수)...`);
+        const sentimentScores = [];
+        const BATCH_SIZE = 10; // 한 번에 처리할 요청 수 (15 미만으로 설정)
+        for (let i = 0; i < allFoundArticles.length; i += BATCH_SIZE) {
+            const batch = allFoundArticles.slice(i, i + BATCH_SIZE);
+            const sentimentPromises = batch.map(article => calculateSentimentScore(geminiModel, article.title));
+            const batchScores = await Promise.all(sentimentPromises);
+            sentimentScores.push(...batchScores);
+            
+            console.log(`    - 감성 분석 진행: ${sentimentScores.length} / ${allFoundArticles.length}`);
+
+            if (i + BATCH_SIZE < allFoundArticles.length) {
+                await sleep(60000); // 1분 대기하여 다음 배치의 RPM을 초기화
+            }
+        }
 
         allFoundArticles.forEach((article, index) => {
             const sentimentScore = sentimentScores[index];
@@ -237,11 +267,18 @@ async function main() {
             .sort((a, b) => b.score - a.score)
             .slice(0, 5); // 추천 이유 생성을 위해 API 호출 수를 5개로 제한
 
-        // ✨ FIX: AI 추천 이유 생성을 병렬로 처리
-        const reasonPromises = candidates.map(stock => 
-            generateRecommendationReason(geminiModel, stock.ticker, stock.companyName, stock.score, stock.marketCap, stock.avgSentiment)
-        );
-        const reasons = await Promise.all(reasonPromises);
+        // ✨ FIX: AI 추천 이유 생성 시에도 Rate Limit 준수
+        const reasons = [];
+        if (candidates.length > 0) {
+            console.log(`  - ${candidates.length}개 추천 종목의 추천 이유를 생성합니다...`);
+            await sleep(60000); // 이전 API 호출로부터 1분 대기
+            const reasonPromises = candidates.map(stock => 
+                generateRecommendationReason(geminiModel, stock.ticker, stock.companyName, stock.score, stock.marketCap, stock.avgSentiment)
+            );
+            const resolvedReasons = await Promise.all(reasonPromises);
+            reasons.push(...resolvedReasons);
+        }
+
 
         const recommendedStocks = candidates.map((stock, index) => ({
             ticker: stock.ticker,
