@@ -221,7 +221,7 @@ async function main() {
 
             console.log(`  - [${ticker}] 점수 계산 완료: ${score.toFixed(2)} (기본: ${baseScore}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'}, 감성: ${avgSentiment.toFixed(2)})`);
             
-            scoredStocks.push({ ticker, score, companyName: kTickerInfo[ticker]?.name || ticker });
+            scoredStocks.push({ ticker, score, companyName: kTickerInfo[ticker]?.name || ticker, marketCap, avgSentiment });
         }
 
         if (scoredStocks.length === 0) {
@@ -232,16 +232,23 @@ async function main() {
 
         // 3. 테마별 추천 종목 선정
         const SCORE_THRESHOLD = 5.0; // 이 점수 이상일 때만 추천
-        const recommendedStocks = scoredStocks
+        const candidates = scoredStocks
             .filter(stock => stock.score > SCORE_THRESHOLD)
             .sort((a, b) => b.score - a.score)
-            .slice(0, 10) // 최대 10개까지만 추천
-            .map(stock => ({
-                ticker: stock.ticker,
-                companyName: stock.companyName,
-                reason: `뉴스 분석 결과 높은 점수(${stock.score.toFixed(2)})를 기록했습니다.`, // 간단한 추천 이유
-                score: stock.score.toFixed(2)
-            }));
+            .slice(0, 5); // 추천 이유 생성을 위해 API 호출 수를 5개로 제한
+
+        // ✨ FIX: AI 추천 이유 생성을 병렬로 처리
+        const reasonPromises = candidates.map(stock => 
+            generateRecommendationReason(geminiModel, stock.ticker, stock.companyName, stock.score, stock.marketCap, stock.avgSentiment)
+        );
+        const reasons = await Promise.all(reasonPromises);
+
+        const recommendedStocks = candidates.map((stock, index) => ({
+            ticker: stock.ticker,
+            companyName: stock.companyName,
+            reason: reasons[index] || `뉴스 분석 결과 높은 점수(${stock.score.toFixed(2)})를 기록했습니다.`,
+            score: stock.score.toFixed(2)
+        }));
         
         if (recommendedStocks.length > 0) {
             finalResults[themeName] = { recommendations: recommendedStocks }; // 새로운 추천 포맷
