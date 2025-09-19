@@ -68,19 +68,35 @@ async function getMarketCap(ticker) {
  * @returns {Promise<number>} 감성 점수 (긍정: 1.5, 중립: 1.0, 부정: 0.2)
  */
 async function calculateSentimentScore(model, title) {
-    try {
-        const prompt = `Analyze the sentiment of the following news headline. Respond with only one word: POSITIVE, NEUTRAL, or NEGATIVE.\n\nHeadline: "${title}"`;
-        const result = await model.generateContent(prompt);
-        const sentiment = result.response.text().trim().toUpperCase();
+    let retries = 3;
+    let backoff = 2000; // 초기 대기 시간: 2초
 
-        if (sentiment.includes('POSITIVE')) return 1.5;
-        if (sentiment.includes('NEGATIVE')) return 0.2; // 부정적일 경우 점수를 매우 낮게 부여
-        return 1.0; // 중립적이거나 판단이 어려울 경우 기본 점수
-    } catch (e) {
-        console.warn(`  - 감성 분석 중 오류 발생: ${e.message}. 기본 점수(1.0)를 사용합니다.`);
-        // API 오류 발생 시 분석 흐름이 끊기지 않도록 기본 점수 반환
-        return 1.0;
+    while (retries > 0) {
+        try {
+            const prompt = `Analyze the sentiment of the following news headline. Respond with only one word: POSITIVE, NEUTRAL, or NEGATIVE.\n\nHeadline: "${title}"`;
+            const result = await model.generateContent(prompt);
+            const sentiment = result.response.text().trim().toUpperCase();
+
+            if (sentiment.includes('POSITIVE')) return 1.5;
+            if (sentiment.includes('NEGATIVE')) return 0.2; // 부정적일 경우 점수를 매우 낮게 부여
+            return 1.0; // 중립적이거나 판단이 어려울 경우 기본 점수
+        } catch (e) {
+            // 503 (서버 과부하) 또는 429 (사용량 초과) 오류인 경우에만 재시도
+            if (e.message.includes('503') || e.message.includes('429')) {
+                retries--;
+                console.warn(`  - 감성 분석 API 오류(${e.message.match(/\[(\d{3}) .*\]/)?.[1] || 'N/A'}). ${retries > 0 ? `${backoff / 1000}초 후 재시도합니다... (${retries}회 남음)` : '재시도 모두 실패.'}`);
+                if (retries > 0) {
+                    await sleep(backoff);
+                    backoff *= 2; // 다음 대기 시간은 2배로 증가
+                }
+            } else {
+                // 그 외 다른 오류는 즉시 실패 처리
+                break;
+            }
+        }
     }
+    console.warn(`  - 감성 분석 최종 실패. 기본 점수(1.0)를 사용합니다.`);
+    return 1.0; // 모든 재시도 실패 시 기본 점수 반환
 }
 
 /**
