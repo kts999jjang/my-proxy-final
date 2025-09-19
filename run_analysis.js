@@ -68,35 +68,19 @@ async function getMarketCap(ticker) {
  * @returns {Promise<number>} 감성 점수 (긍정: 1.5, 중립: 1.0, 부정: 0.2)
  */
 async function calculateSentimentScore(model, title) {
-    let retries = 3;
-    let backoff = 2000; // 초기 대기 시간: 2초
+    // 재시도 로직은 이제 호출하는 쪽에서 중앙 관리합니다.
+    try {
+        const prompt = `Analyze the sentiment of the following news headline. Respond with only one word: POSITIVE, NEUTRAL, or NEGATIVE.\n\nHeadline: "${title}"`;
+        const result = await model.generateContent(prompt);
+        const sentiment = result.response.text().trim().toUpperCase();
 
-    while (retries > 0) {
-        try {
-            const prompt = `Analyze the sentiment of the following news headline. Respond with only one word: POSITIVE, NEUTRAL, or NEGATIVE.\n\nHeadline: "${title}"`;
-            const result = await model.generateContent(prompt);
-            const sentiment = result.response.text().trim().toUpperCase();
-
-            if (sentiment.includes('POSITIVE')) return 1.5;
-            if (sentiment.includes('NEGATIVE')) return 0.2; // 부정적일 경우 점수를 매우 낮게 부여
-            return 1.0; // 중립적이거나 판단이 어려울 경우 기본 점수
-        } catch (e) {
-            // 503 (서버 과부하) 또는 429 (사용량 초과) 오류인 경우에만 재시도
-            if (e.message.includes('503') || e.message.includes('429')) {
-                retries--;
-                console.warn(`  - 감성 분석 API 오류(${e.message.match(/\[(\d{3}) .*\]/)?.[1] || 'N/A'}). ${retries > 0 ? `${backoff / 1000}초 후 재시도합니다... (${retries}회 남음)` : '재시도 모두 실패.'}`);
-                if (retries > 0) {
-                    await sleep(backoff);
-                    backoff *= 2; // 다음 대기 시간은 2배로 증가
-                }
-            } else {
-                // 그 외 다른 오류는 즉시 실패 처리
-                break;
-            }
-        }
+        if (sentiment.includes('POSITIVE')) return 1.5;
+        if (sentiment.includes('NEGATIVE')) return 0.2;
+        return 1.0;
+    } catch (error) {
+        // 배치 프로세서에서 오류를 처리할 수 있도록 오류를 던집니다.
+        throw error;
     }
-    console.warn(`  - 감성 분석 최종 실패. 기본 점수(1.0)를 사용합니다.`);
-    return 1.0; // 모든 재시도 실패 시 기본 점수 반환
 }
 
 /**
@@ -169,19 +153,42 @@ async function main() {
         const BANNED_ORG_NAMES = new Set(['ai', 'inc', 'corp', 'llc', 'ltd', 'group', 'co', 'tech', 'solutions']);
 
         // ✨ FIX: 감성 분석을 병렬로 처리하여 시간 단축
-        console.log(`  - ${allFoundArticles.length}개 기사의 감성 분석을 시작합니다 (Rate Limit 준수)...`);
+        console.log(`  - ${allFoundArticles.length}개 기사의 감성 분석을 시작합니다 (스로틀링 적용)...`);
         const sentimentScores = [];
-        const BATCH_SIZE = 10; // 한 번에 처리할 요청 수 (15 미만으로 설정)
+        const BATCH_SIZE = 10; // 배치당 병렬 요청 수
+        const BATCH_DELAY = 60000; // RPM 제한을 준수하기 위한 배치 간 60초 지연
+
         for (let i = 0; i < allFoundArticles.length; i += BATCH_SIZE) {
             const batch = allFoundArticles.slice(i, i + BATCH_SIZE);
-            const sentimentPromises = batch.map(article => calculateSentimentScore(geminiModel, article.title));
-            const batchScores = await Promise.all(sentimentPromises);
+            console.log(`    - 감성 분석 배치 처리 중: ${i + 1} - ${i + batch.length} / ${allFoundArticles.length}개`);
+
+            const batchPromises = batch.map(async (article) => {
+                let retries = 3;
+                let backoff = 2000; // 2 seconds
+                while (retries > 0) {
+                    try {
+                        return await calculateSentimentScore(geminiModel, article.title);
+                    } catch (e) {
+                        retries--;
+                        if ((e.message.includes('503') || e.message.includes('429')) && retries > 0) {
+                            console.warn(`      - API 오류 발생 ("${article.title.substring(0, 20)}..."). ${backoff/1000}초 후 재시도... (${retries}회 남음)`);
+                            await sleep(backoff);
+                            backoff *= 2;
+                        } else {
+                            console.error(`      - API 최종 실패 ("${article.title.substring(0, 20)}..."): ${e.message}`);
+                            return 1.0; // 최종 실패 시 기본 점수 반환
+                        }
+                    }
+                }
+                return 1.0; // 안전장치
+            });
+
+            const batchScores = await Promise.all(batchPromises);
             sentimentScores.push(...batchScores);
-            
-            console.log(`    - 감성 분석 진행: ${sentimentScores.length} / ${allFoundArticles.length}`);
 
             if (i + BATCH_SIZE < allFoundArticles.length) {
-                await sleep(60000); // 1분 대기하여 다음 배치의 RPM을 초기화
+                console.log(`    - 다음 배치를 위해 ${BATCH_DELAY / 1000}초 대기합니다...`);
+                await sleep(BATCH_DELAY);
             }
         }
 
