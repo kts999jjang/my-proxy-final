@@ -331,10 +331,15 @@ async function main() {
             for (const [orgName, count] of Object.entries(organizationCounts)) {
                 let foundTicker = null;
                 for (const [ticker, info] of Object.entries(kTickerInfo)) {
-                    // ✨ FIX: info 객체와 info.keywords가 유효한지 확인하여 TypeError 방지
-                    if (info && info.keywords && info.keywords.some(kw => orgName.includes(kw))) {
-                        foundTicker = ticker;
-                        break;
+                    try {
+                        const parsedInfo = JSON.parse(info); // ✨ FIX: info는 JSON 문자열이므로 파싱
+                        // ✨ FIX: info 객체와 info.keywords가 유효한지 확인하여 TypeError 방지
+                        if (parsedInfo && parsedInfo.keywords && parsedInfo.keywords.some(kw => orgName.includes(kw))) {
+                            foundTicker = ticker;
+                            break;
+                        }
+                    } catch (e) {
+                        // 파싱 실패는 이전 데이터 형식일 수 있으므로 무시
                     }
                 }
 
