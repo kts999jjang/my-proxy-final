@@ -379,7 +379,7 @@ async function main() {
                     const stockInfo = { name: existingInfo.name || ticker, style, keywords: existingInfo.keywords || [] };
                     await redis.hset('stock-info', { [ticker]: JSON.stringify(stockInfo) });
                     // 메모리에 있는 정보도 업데이트
-                    kTickerInfo[ticker] = JSON.stringify(stockInfo);
+                    kTickerInfo[ticker] = JSON.stringify(stockInfo); // ✨ FIX: 메모리 내 kTickerInfo에도 항상 JSON 문자열을 저장하여 데이터 형식을 일관되게 유지
                 }
 
                 console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스언급: ${newsScore}, 내부자: ${insiderScore}, 애널리스트: ${analystScore}, 서프라이즈: ${surpriseScore}, 재무: ${financialsScore.toFixed(1)}, 감성: ${sentimentScore.toFixed(1)}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'})`);
