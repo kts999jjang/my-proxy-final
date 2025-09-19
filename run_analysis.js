@@ -128,6 +128,9 @@ async function main() {
 
     const finalResults = {};
 
+    // ✨ FIX 3: 시가총액 중복 조회를 방지하기 위한 캐시
+    const marketCapCache = new Map();
+
     try {
         for (const themeName of Object.keys(kInvestmentThemes)) {
             console.log(`\n'${themeName}' 테마 분석 중...`);
@@ -144,8 +147,11 @@ async function main() {
 
             // 분석할 기사 수를 500개로 늘림
             const queryResult = await index.query({ 
-                topK: 500, vector: queryVector, includeMetadata: true,
-                filter: { "publishedAt": { "$gte": fromDate.getTime() / 1000 } }
+                topK: 500, 
+                vector: queryVector, 
+                includeMetadata: true,
+                // ✨ FIX 1: 테마별 뉴스 필터링을 위해 테마 이름을 메타데이터로 활용
+                filter: { "theme": { "$eq": themeName } }
             });
 
             const allFoundArticles = queryResult.matches.map(match => match.metadata);
@@ -213,10 +219,17 @@ async function main() {
             
             console.log(`  - 상위 ${candidatesForAnalysis.length}개 후보 종목에 대한 심층 분석을 시작합니다...`);
 
-            // STEP 5: 각 후보 종목에 대한 데이터 수집 (API 호출 병렬 처리)
+            // ✨ FIX 3: 시가총액을 미리 한 번만 조회하여 캐시에 저장
+            for (const candidate of candidatesForAnalysis) {
+                if (!marketCapCache.has(candidate.ticker)) {
+                    const marketCap = await getMarketCap(candidate.ticker);
+                    marketCapCache.set(candidate.ticker, marketCap);
+                }
+            }
+
+            // STEP 5: 내부자/애널리스트 점수만 병렬로 조회
             const tickersToAnalyze = candidatesForAnalysis.map(c => c.ticker);
             const analysisPromises = tickersToAnalyze.map(ticker => Promise.all([
-                getMarketCap(ticker),
                 getInsiderSentimentScore(ticker),
                 getAnalystRatingScore(ticker)
             ]));
@@ -226,7 +239,8 @@ async function main() {
             const scoredStocks = [];
             for (let i = 0; i < candidatesForAnalysis.length; i++) {
                 const { ticker, newsScore } = candidatesForAnalysis[i];
-                const [marketCap, insiderScore, analystScore] = analysisResults[i];
+                const [insiderScore, analystScore] = analysisResults[i];
+                const marketCap = marketCapCache.get(ticker); // 캐시에서 시가총액 조회
 
                 // 각 지표에 가중치를 부여하여 종합 점수 계산
                 const weights = { news: 0.2, insider: 0.4, analyst: 0.4 };
@@ -252,8 +266,13 @@ async function main() {
                 scoredStocks.push({ 
                     ticker, 
                     score: compositeScore, 
-                    companyName: kTickerInfo[ticker]?.name || ticker,
-                    reason: `내부자(${insiderScore}), 애널리스트(${analystScore}), 뉴스(${newsScore}) 점수를 종합하여 높은 평가를 받았습니다.`
+                    companyName: kTickerInfo[ticker]?.name || ticker, // Redis에서 로드된 정보 사용
+                    // ✨ FIX 2: 상세 점수를 reason 객체에 포함
+                    reason: {
+                        newsScore,
+                        insiderScore,
+                        analystScore,
+                    }
                 });
             }
 

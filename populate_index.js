@@ -76,6 +76,7 @@ async function main() {
           source: article.source.name,
           url: article.url,
           publishedAt: publishedAtTimestamp,
+          theme: themeName, // ✨ FIX 1: 메타데이터에 테마 이름 추가
         },
       });
       
