@@ -105,11 +105,39 @@ async function getAnalystRatingScore(ticker) {
     }
 }
 
+/**
+ * Slack으로 알림 메시지를 전송하는 함수
+ * @param {string} message - 보낼 메시지
+ * @param {'good' | 'danger' | 'warning'} color - 메시지 색상 (good: 초록, danger: 빨강, warning: 노랑)
+ */
+async function sendSlackNotification(message, color = 'good') {
+    const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+    if (!webhookUrl) {
+        console.log("Slack Webhook URL이 설정되지 않아 알림을 보내지 않습니다.");
+        return;
+    }
+
+    const payload = {
+        attachments: [{
+            color: color,
+            text: message,
+            ts: Math.floor(Date.now() / 1000)
+        }]
+    };
+
+    try {
+        await fetch(webhookUrl, {
+            method: 'POST',
+            body: JSON.stringify(payload),
+            headers: { 'Content-Type': 'application/json' },
+        });
+    } catch (error) {
+        console.error("Slack 알림 전송 중 오류 발생:", error);
+    }
+}
 
 // --- 메인 실행 함수 ---
 async function main() {
-    console.log("백그라운드 분석 및 데이터 저장을 시작합니다...");
-
     const fromDate = new Date();
     fromDate.setDate(fromDate.getDate() - 14);
 
@@ -121,6 +149,8 @@ async function main() {
         url: process.env.UPSTASH_REDIS_REST_URL,
         token: process.env.UPSTASH_REDIS_REST_TOKEN,
     });
+
+    await sendSlackNotification("📈 주식 분석 스크립트를 시작합니다...", '#439FE0');
 
     // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
     const kTickerInfo = await redis.hgetall('stock-info') || {};
@@ -291,16 +321,26 @@ async function main() {
             }
         }
     } catch (error) {
-        console.error("스크립트 실행 중 치명적인 오류 발생:", error);
+        const errorMessage = `🚨 스크립트 실행 중 치명적인 오류 발생: ${error.message}`;
+        console.error(errorMessage);
+        await sendSlackNotification(errorMessage, 'danger');
+        // 오류 발생 시 프로세스 종료
+        process.exit(1);
     }
 
     // 4. 최종 결과를 Redis에 저장
     if (Object.keys(finalResults).length > 0) {
-        console.log("\n분석 완료. 최종 결과를 Redis에 저장합니다...");
+        const summary = Object.entries(finalResults)
+            .map(([theme, res]) => `• *${theme}*: ${res.leading.length + res.growth.length}개`)
+            .join('\n');
+        const successMessage = `✅ 분석 완료! 총 ${Object.keys(finalResults).length}개 테마의 추천 종목을 Redis에 저장했습니다.\n\n${summary}`;
+        console.log(successMessage);
         await redis.set('latest_recommendations', JSON.stringify({ results: finalResults }));
-        console.log("✨ Redis 저장 완료! 이제 앱에서 새로운 데이터를 조회할 수 있습니다.");
+        await sendSlackNotification(successMessage, 'good');
     } else {
-        console.warn("\n분석된 유효한 추천 종목이 없어 Redis에 데이터를 저장하지 않습니다.");
+        const warningMessage = "⚠️ 분석된 유효한 추천 종목이 없어 Redis에 데이터를 저장하지 않았습니다.";
+        console.warn(warningMessage);
+        await sendSlackNotification(warningMessage, 'warning');
     }
 }
 
