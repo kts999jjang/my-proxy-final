@@ -106,6 +106,73 @@ async function getAnalystRatingScore(ticker) {
 }
 
 /**
+ * Finnhub API를 사용해 기본 재무 정보를 조회하고 점수를 매기는 함수
+ * @param {string} ticker - 주식 티커
+ * @returns {Promise<number>} 재무 점수
+ */
+async function getFinancialsScore(ticker) {
+    const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
+    try {
+        await sleep(1100); // API 호출 제한 준수
+        const metrics = (await (await fetch(url)).json())?.metric;
+        let score = 0;
+        if (!metrics) return 0;
+
+        // P/E 비율이 낮을수록 높은 점수 (30 미만일 때)
+        if (metrics.peNormalizedAnnual && metrics.peNormalizedAnnual < 30) {
+            score += (1 - metrics.peNormalizedAnnual / 30) * 5;
+        }
+        // P/B 비율이 낮을수록 높은 점수 (3 미만일 때)
+        if (metrics.pbAnnual && metrics.pbAnnual < 3) {
+            score += (1 - metrics.pbAnnual / 3) * 5;
+        }
+        return score;
+    } catch (e) {
+        console.warn(`  - ${ticker}의 재무 정보 조회 중 오류: ${e.message}`);
+        return 0;
+    }
+}
+
+/**
+ * Finnhub API를 사용해 종목 뉴스의 감성 점수를 계산하는 함수
+ * @param {string} ticker - 주식 티커
+ * @returns {Promise<number>} 뉴스 감성 점수
+ */
+async function getNewsSentimentScore(ticker) {
+    const url = `https://finnhub.io/api/v1/company-news-sentiment?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
+    try {
+        await sleep(1100); // API 호출 제한 준수
+        const data = await (await fetch(url)).json();
+        // 'companyNewsScore'는 0-1 사이의 값. 이를 10점 만점으로 변환
+        const sentimentScore = (data?.companyNewsScore || 0) * 10;
+        return sentimentScore;
+    } catch (e) {
+        console.warn(`  - ${ticker}의 뉴스 감성 분석 중 오류: ${e.message}`);
+        return 0;
+    }
+}
+
+/**
+ * Finnhub API를 사용해 어닝 서프라이즈 정보를 조회하는 함수
+ * @param {string} ticker - 주식 티커
+ * @returns {Promise<number>} 어닝 서프라이즈 점수
+ */
+async function getEarningsSurpriseScore(ticker) {
+    const url = `https://finnhub.io/api/v1/stock/earnings?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
+    try {
+        await sleep(1100); // API 호출 제한 준수
+        const response = await fetch(url);
+        const data = await response.json();
+        // 최근 4분기 동안 예상치를 상회한(positive surprise) 횟수를 점수로 활용
+        const positiveSurprises = data?.filter(d => d.surprise > 0).length || 0;
+        return positiveSurprises * 2.5; // 분기당 2.5점 부여
+    } catch (e) {
+        console.warn(`  - ${ticker}의 어닝 서프라이즈 조회 중 오류: ${e.message}`);
+        return 0;
+    }
+}
+
+/**
  * Slack으로 알림 메시지를 전송하는 함수
  * @param {string} message - 보낼 메시지
  * @param {'good' | 'danger' | 'warning'} color - 메시지 색상 (good: 초록, danger: 빨강, warning: 노랑)
@@ -261,7 +328,10 @@ async function main() {
             const tickersToAnalyze = candidatesForAnalysis.map(c => c.ticker);
             const analysisPromises = tickersToAnalyze.map(ticker => Promise.all([
                 getInsiderSentimentScore(ticker),
-                getAnalystRatingScore(ticker)
+                getAnalystRatingScore(ticker),
+                getEarningsSurpriseScore(ticker),
+                getFinancialsScore(ticker),
+                getNewsSentimentScore(ticker)
             ]));
             const analysisResults = await Promise.all(analysisPromises);
 
@@ -269,12 +339,13 @@ async function main() {
             const scoredStocks = [];
             for (let i = 0; i < candidatesForAnalysis.length; i++) {
                 const { ticker, newsScore } = candidatesForAnalysis[i];
-                const [insiderScore, analystScore] = analysisResults[i];
+                const [insiderScore, analystScore, surpriseScore, financialsScore, sentimentScore] = analysisResults[i];
                 const marketCap = marketCapCache.get(ticker); // 캐시에서 시가총액 조회
 
                 // 각 지표에 가중치를 부여하여 종합 점수 계산
-                const weights = { news: 0.2, insider: 0.4, analyst: 0.4 };
-                let compositeScore = (newsScore * weights.news) + (insiderScore * weights.insider) + (analystScore * weights.analyst);
+                const weights = { news: 0.15, insider: 0.25, analyst: 0.25, surprise: 0.15, financials: 0.1, sentiment: 0.1 };
+                let compositeScore = (newsScore * weights.news) + (insiderScore * weights.insider) + (analystScore * weights.analyst) + 
+                                     (surpriseScore * weights.surprise) + (financialsScore * weights.financials) + (sentimentScore * weights.sentiment);
                 
                 // ✨ FIX: 시가총액 기준으로 스타일을 동적으로 결정하고 Redis에 저장
                 let style = 'growth'; // 기본값
@@ -292,7 +363,7 @@ async function main() {
                 }
                 kTickerInfo[ticker].style = style; // 메모리에 있는 정보도 업데이트
 
-                console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스: ${newsScore}, 내부자: ${insiderScore}, 애널리스트: ${analystScore}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'})`);
+                console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스언급: ${newsScore}, 내부자: ${insiderScore}, 애널리스트: ${analystScore}, 서프라이즈: ${surpriseScore}, 재무: ${financialsScore.toFixed(1)}, 감성: ${sentimentScore.toFixed(1)}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'})`);
                 scoredStocks.push({ 
                     ticker, 
                     score: compositeScore, 
@@ -302,6 +373,9 @@ async function main() {
                         newsScore,
                         insiderScore,
                         analystScore,
+                        surpriseScore,
+                        financialsScore,
+                        sentimentScore,
                     }
                 });
             }
