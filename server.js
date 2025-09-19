@@ -26,8 +26,14 @@ async function loadTickerInfoFromRedis() {
     url: process.env.UPSTASH_REDIS_REST_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN,
   });
-  kTickerInfo = await redis.hgetall('stock-info') || {};
-  console.log(`${Object.keys(kTickerInfo).length} tickers loaded.`);
+  // ✨ FIX: 서버 시작 시 발생하는 오류를 처리하여 안정성 확보
+  try {
+    kTickerInfo = await redis.hgetall('stock-info') || {};
+    console.log(`${Object.keys(kTickerInfo).length} tickers loaded successfully.`);
+  } catch (error) {
+    console.error('Failed to load ticker info from Redis on startup:', error);
+    // Redis에서 데이터를 로드하지 못해도 서버는 계속 실행되도록 합니다.
+  }
 }
 // --- API 호출 및 계산 헬퍼 함수 ---
 async function fetchStockDataFromYahoo(ticker) {
