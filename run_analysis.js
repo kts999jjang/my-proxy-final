@@ -367,9 +367,8 @@ async function main() {
                 scoredStocks.push({ 
                     ticker, 
                     score: compositeScore, 
-                    companyName: kTickerInfo[ticker]?.name || ticker, // Redis에서 로드된 정보 사용
-                    // ✨ FIX 2: 상세 점수를 reason 객체에 포함
-                    reason: {
+                    companyName: kTickerInfo[ticker]?.name || ticker,
+                    reason: { // Flutter 앱이 기대하는 상세 점수 객체
                         newsScore,
                         insiderScore,
                         analystScore,
