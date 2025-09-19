@@ -4,7 +4,7 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const nlp = require('compromise');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { kInvestmentThemes, kTickerInfo } = require('./constants');
+const { kInvestmentThemes } = require('./constants');
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -31,7 +31,10 @@ async function getTickerForCompanyName(companyName, redis) {
         const bestMatch = data?.bestMatches?.[0];
         if (bestMatch && parseFloat(bestMatch['9. matchScore']) > 0.7) {
             const ticker = bestMatch['1. symbol'];
-            await redis.set(cleanedName, ticker, { ex: 60 * 60 * 24 * 7 });
+            const companyName = bestMatch['2. name'];
+            // ✨ FIX: 티커와 회사명을 함께 객체로 캐싱
+            const result = { ticker, companyName };
+            await redis.set(cleanedName, JSON.stringify(result), { ex: 60 * 60 * 24 * 7 });
             return ticker;
         }
         return null;
@@ -119,6 +122,10 @@ async function main() {
         token: process.env.UPSTASH_REDIS_REST_TOKEN,
     });
 
+    // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
+    const kTickerInfo = await redis.hgetall('stock-info') || {};
+    console.log(`${Object.keys(kTickerInfo).length}개의 주식 정보를 Redis에서 로드했습니다.`);
+
     const finalResults = {};
 
     try {
@@ -182,15 +189,19 @@ async function main() {
                 }
             }
 
-            // STEP 3: kTickerInfo에 없는 기관명 중 상위 5개만 티커 조회 (Alpha Vantage API 호출)
+            // ✨ FIX: kTickerInfo에 없는 새로운 회사들도 적극적으로 티커를 조회하고 분석 대상에 포함
             console.log(`  - ${unknownOrgs.length}개의 새로운 회사 티커를 조회합니다...`);
-            const topUnknownOrgs = unknownOrgs.sort((a, b) => organizationCounts[b] - organizationCounts[a]).slice(0, 5);
-            for (const orgName of topUnknownOrgs) {
-                if (!Object.values(kTickerInfo).some(info => info.keywords.some(kw => orgName.includes(kw)))) {
-                    const newTicker = await getTickerForCompanyName(orgName, redis);
-                    if (newTicker) {
-                        themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
-                    }
+            const unknownOrgsToQuery = unknownOrgs
+                .sort((a, b) => organizationCounts[b] - organizationCounts[a])
+                .slice(0, 10); // 상위 10개의 새로운 회사에 대해서만 티커 조회 (API 호출 제한)
+
+            for (const orgName of unknownOrgsToQuery) {
+                const companyInfo = await getTickerForCompanyName(orgName, redis);
+                if (companyInfo && companyInfo.ticker && !kTickerInfo[companyInfo.ticker]) {
+                    const newTicker = companyInfo.ticker;
+                    themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
+                    // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 임시 추가 (분류를 위해)
+                    kTickerInfo[newTicker] = { name: companyInfo.companyName, style: 'growth' }; // 기본값은 'growth'
                 }
             }
 
@@ -220,12 +231,22 @@ async function main() {
                 // 각 지표에 가중치를 부여하여 종합 점수 계산
                 const weights = { news: 0.2, insider: 0.4, analyst: 0.4 };
                 let compositeScore = (newsScore * weights.news) + (insiderScore * weights.insider) + (analystScore * weights.analyst);
-
+                
+                // ✨ FIX: 시가총액 기준으로 스타일을 동적으로 결정하고 Redis에 저장
+                let style = 'growth'; // 기본값
                 // 시가총액이 낮을수록 보너스 점수 부여 (숨은 보석 찾기)
-                if (marketCap && marketCap < 500 * 1000 * 1000 * 1000) { // 5000억 달러 미만
-                    const marketCapBonus = (1 - Math.min(marketCap, 500e9) / 500e9) * 10; // 최대 10점 보너스
-                    compositeScore += marketCapBonus;
+                if (marketCap) {
+                    if (marketCap >= 100 * 1000 * 1000 * 1000) { // 1000억 달러 이상
+                        style = 'leading';
+                    } else {
+                        const marketCapBonus = (1 - Math.min(marketCap, 100e9) / 100e9) * 10; // 최대 10점 보너스
+                        compositeScore += marketCapBonus;
+                    }
+                    // Redis에 최신 정보 저장
+                    const stockInfo = { name: kTickerInfo[ticker]?.name || ticker, style };
+                    await redis.hset('stock-info', { [ticker]: JSON.stringify(stockInfo) });
                 }
+                kTickerInfo[ticker].style = style; // 메모리에 있는 정보도 업데이트
 
                 console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스: ${newsScore}, 내부자: ${insiderScore}, 애널리스트: ${analystScore}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'})`);
                 scoredStocks.push({ 
