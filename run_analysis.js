@@ -152,57 +152,17 @@ async function main() {
         // 'ai', 'inc' 등 회사 이름으로 잘못 인식될 수 있는 일반 단어 목록
         const BANNED_ORG_NAMES = new Set(['ai', 'inc', 'corp', 'llc', 'ltd', 'group', 'co', 'tech', 'solutions']);
 
-        // ✨ FIX: 감성 분석을 병렬로 처리하여 시간 단축
-        console.log(`  - ${allFoundArticles.length}개 기사의 감성 분석을 시작합니다 (스로틀링 적용)...`);
-        const sentimentScores = [];
-        const BATCH_SIZE = 10; // 배치당 병렬 요청 수
-        const BATCH_DELAY = 60000; // RPM 제한을 준수하기 위한 배치 간 60초 지연
-
-        for (let i = 0; i < allFoundArticles.length; i += BATCH_SIZE) {
-            const batch = allFoundArticles.slice(i, i + BATCH_SIZE);
-            console.log(`    - 감성 분석 배치 처리 중: ${i + 1} - ${i + batch.length} / ${allFoundArticles.length}개`);
-
-            const batchPromises = batch.map(async (article) => {
-                let retries = 3;
-                let backoff = 2000; // 2 seconds
-                while (retries > 0) {
-                    try {
-                        return await calculateSentimentScore(geminiModel, article.title);
-                    } catch (e) {
-                        retries--;
-                        if ((e.message.includes('503') || e.message.includes('429')) && retries > 0) {
-                            console.warn(`      - API 오류 발생 ("${article.title.substring(0, 20)}..."). ${backoff/1000}초 후 재시도... (${retries}회 남음)`);
-                            await sleep(backoff);
-                            backoff *= 2;
-                        } else {
-                            console.error(`      - API 최종 실패 ("${article.title.substring(0, 20)}..."): ${e.message}`);
-                            return 1.0; // 최종 실패 시 기본 점수 반환
-                        }
-                    }
-                }
-                return 1.0; // 안전장치
-            });
-
-            const batchScores = await Promise.all(batchPromises);
-            sentimentScores.push(...batchScores);
-
-            if (i + BATCH_SIZE < allFoundArticles.length) {
-                console.log(`    - 다음 배치를 위해 ${BATCH_DELAY / 1000}초 대기합니다...`);
-                await sleep(BATCH_DELAY);
-            }
-        }
-
-        allFoundArticles.forEach((article, index) => {
-            const sentimentScore = sentimentScores[index];
+        // STEP 1: Identify all mentioned organizations and their base scores without API calls
+        allFoundArticles.forEach(article => {
             const doc = nlp(article.title);
             doc.organizations().out('array').forEach(org => {
                 const orgName = org.toLowerCase().replace(/\./g, '').replace(/,/g, '').replace(/ inc$/, '').trim();
                 // 길이가 1~2자인 약어이거나, 일반 단어 목록에 포함되지 않은 경우에만 점수 계산
                 if (orgName.length > 2 && !BANNED_ORG_NAMES.has(orgName)) {
                     organizationCounts[orgName] = (organizationCounts[orgName] || 0) + 1; // 기본 언급 횟수
-                    if (!orgToArticlesMap.has(orgName)) orgToArticlesMap.set(orgName, { totalSentiment: 0, count: 0 });
-                    orgToArticlesMap.get(orgName).totalSentiment += sentimentScore;
-                    orgToArticlesMap.get(orgName).count++;
+                    if (!orgToArticlesMap.has(orgName)) orgToArticlesMap.set(orgName, { articles: [] });
+                    // Store articles for later sentiment analysis
+                    orgToArticlesMap.get(orgName).articles = (orgToArticlesMap.get(orgName).articles || []).concat(article.title);
                 }
             });
         });
@@ -210,7 +170,7 @@ async function main() {
         const themeTickerScores = {};
         const unknownOrgs = [];
 
-        // 1. kTickerInfo에 정의된 종목인지 먼저 확인
+        // STEP 2: Match organizations to known tickers
         for (const [orgName, count] of Object.entries(organizationCounts)) {
             // kTickerInfo의 keywords와 매칭되는지 명시적으로 확인
             let foundTicker = null;
@@ -228,7 +188,7 @@ async function main() {
             }
         }
 
-        // 2. kTickerInfo에 없는 회사들만 API로 조회 (API 호출 최소화를 위해 상위 5개만)
+        // STEP 3: Find tickers for top unknown organizations (minimal API calls)
         console.log(`  - ${unknownOrgs.length}개의 새로운 회사 티커를 조회합니다...`);
         const topUnknownOrgs = unknownOrgs.sort((a, b) => organizationCounts[b] - organizationCounts[a]).slice(0, 5);
         for (const orgName of topUnknownOrgs) {
@@ -240,16 +200,42 @@ async function main() {
             }
         }
 
-        // 2.5. 시가총액 및 감성 점수를 이용한 최종 점수 보정
-        const tickersToAnalyze = Object.keys(themeTickerScores);
+        // STEP 4: Select top candidates for deep analysis to conserve API quota
+        const topCandidates = Object.entries(themeTickerScores)
+            .sort(([,a],[,b]) => b-a)
+            .slice(0, 15) // Analyze only the top 15 most mentioned stocks
+            .map(([ticker, baseScore]) => ({ ticker, baseScore }));
+
+        console.log(`  - 상위 ${topCandidates.length}개 후보 종목에 대한 심층 분석(API 호출)을 시작합니다...`);
+
+        // STEP 5: Perform expensive API calls ONLY for top candidates
+        const tickersToAnalyze = topCandidates.map(c => c.ticker);
         const marketCapPromises = tickersToAnalyze.map(ticker => getMarketCap(ticker));
         const marketCaps = await Promise.all(marketCapPromises);
 
         const scoredStocks = [];
-        for (let i = 0; i < tickersToAnalyze.length; i++) {
-            const ticker = tickersToAnalyze[i];
-            const baseScore = themeTickerScores[ticker];
+        for (let i = 0; i < topCandidates.length; i++) {
+            const { ticker, baseScore } = topCandidates[i];
             const marketCap = marketCaps[i];
+
+            // Calculate sentiment only for this candidate's articles
+            const companyKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
+            let articlesForSentiment = [];
+            for (const [orgName, data] of orgToArticlesMap.entries()) {
+                if (companyKeywords.some(kw => orgName.includes(kw))) {
+                    articlesForSentiment.push(...data.articles);
+                }
+            }
+            // To save API calls, analyze a max of 5 articles per stock
+            const articlesToAnalyze = [...new Set(articlesForSentiment)].slice(0, 5);
+            let totalSentiment = 0;
+            if (articlesToAnalyze.length > 0) {
+                // This will make 1-5 API calls per candidate stock
+                const sentimentPromises = articlesToAnalyze.map(title => calculateSentimentScore(geminiModel, title));
+                const sentimentResults = await Promise.all(sentimentPromises);
+                totalSentiment = sentimentResults.reduce((sum, score) => sum + score, 0);
+            }
+            const avgSentiment = articlesToAnalyze.length > 0 ? totalSentiment / articlesToAnalyze.length : 1.0;
 
             let score = parseFloat(baseScore);
 
@@ -259,17 +245,6 @@ async function main() {
                 score *= marketCapBonus;
             }
             
-            // ✨ FIX: 단순화되고 정확한 감성 점수 가중치 계산
-            const companyKeywords = kTickerInfo[ticker]?.keywords || [ticker.toLowerCase()];
-            let relevantSentimentSum = 0;
-            let relevantSentimentCount = 0;
-            for (const [orgName, sentimentData] of orgToArticlesMap.entries()) {
-                if (companyKeywords.some(kw => orgName.includes(kw))) {
-                    relevantSentimentSum += sentimentData.totalSentiment;
-                    relevantSentimentCount += sentimentData.count;
-                }
-            }
-            const avgSentiment = relevantSentimentCount > 0 ? relevantSentimentSum / relevantSentimentCount : 1.0;
             score *= avgSentiment; // 평균 감성 점수를 곱함
 
             console.log(`  - [${ticker}] 점수 계산 완료: ${score.toFixed(2)} (기본: ${baseScore}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'}, 감성: ${avgSentiment.toFixed(2)})`);
@@ -283,15 +258,14 @@ async function main() {
         }
         console.log(`  - ${scoredStocks.length}개의 종목 점수 계산 완료.`);
 
-        // 3. 테마별 추천 종목 선정
+        // STEP 6: Generate recommendations and reasons
         const SCORE_THRESHOLD = 5.0; // 이 점수 이상일 때만 추천
         const candidates = scoredStocks
             .filter(stock => stock.score > SCORE_THRESHOLD)
             .sort((a, b) => b.score - a.score)
             .slice(0, 5); // 추천 이유 생성을 위해 API 호출 수를 5개로 제한
 
-        // ✨ FIX: AI 추천 이유 생성 시에도 Rate Limit 준수
-        const reasons = [];
+        let reasons = [];
         if (candidates.length > 0) {
             console.log(`  - ${candidates.length}개 추천 종목의 추천 이유를 생성합니다...`);
             await sleep(60000); // 이전 API 호출로부터 1분 대기
