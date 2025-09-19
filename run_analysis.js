@@ -287,7 +287,8 @@ async function main() {
             for (const [orgName, count] of Object.entries(organizationCounts)) {
                 let foundTicker = null;
                 for (const [ticker, info] of Object.entries(kTickerInfo)) {
-                    if (info.keywords.some(kw => orgName.includes(kw))) {
+                    // ✨ FIX: info 객체와 info.keywords가 유효한지 확인하여 TypeError 방지
+                    if (info && info.keywords && info.keywords.some(kw => orgName.includes(kw))) {
                         foundTicker = ticker;
                         break;
                     }
@@ -300,19 +301,16 @@ async function main() {
                 }
             }
 
-            // ✨ FIX: kTickerInfo에 없는 새로운 회사들도 적극적으로 티커를 조회하고 분석 대상에 포함
-            console.log(`  - ${unknownOrgs.length}개의 새로운 회사 티커를 조회합니다...`);
-            const unknownOrgsToQuery = unknownOrgs
-                .sort((a, b) => organizationCounts[b] - organizationCounts[a])
-                .slice(0, 10); // 상위 10개의 새로운 회사에 대해서만 티커 조회 (API 호출 제한)
-
             for (const orgName of unknownOrgsToQuery) {
                 const companyInfo = await getTickerForCompanyName(orgName, redis);
-                if (companyInfo && companyInfo.ticker && !kTickerInfo[companyInfo.ticker]) {
+                // ✨ FIX: companyInfo가 null이 아닌지 확인
+                if (companyInfo && companyInfo.ticker) {
                     const newTicker = companyInfo.ticker;
-                    themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
-                    // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 임시 추가 (분류를 위해)
-                    kTickerInfo[newTicker] = { name: companyInfo.companyName, style: 'growth' }; // 기본값은 'growth'
+                    if (!kTickerInfo[newTicker]) {
+                        themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + organizationCounts[orgName];
+                        // ✨ FIX: 새로운 종목 정보를 kTickerInfo에 임시 추가 (분류를 위해)
+                        kTickerInfo[newTicker] = { name: companyInfo.companyName, style: 'growth' }; // 기본값은 'growth'
+                    }
                 }
             }
 
