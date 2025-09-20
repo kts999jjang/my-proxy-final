@@ -343,10 +343,12 @@ async function main() {
                 const marketCap = marketCapCache.get(ticker); // 캐시에서 시가총액 조회
                 const sentimentScore = analyzeLocalNewsSentiment(ticker, allFoundArticles, kTickerInfo);
 
-                // 각 지표에 가중치를 부여하여 종합 점수 계산
-                const weights = { news: 0.15, insider: 0.25, analyst: 0.25, surprise: 0.15, financials: 0.1, sentiment: 0.1 };
-                let compositeScore = (newsScore * weights.news) + (insiderScore * weights.insider) + (analystScore * weights.analyst) +
-                                     (surpriseScore * weights.surprise) + (financialsScore * weights.financials) + (sentimentScore * weights.sentiment);
+                // ✨ FIX: 점수 체계를 '관심도'와 '펀더멘탈'로 분리
+                const hypeScore = (newsScore * 0.6) + (sentimentScore * 0.4); // 관심도 = 언급량 60% + 감성 40%
+                const valueScore = (analystScore * 0.3) + (insiderScore * 0.3) + (financialsScore * 0.2) + (surpriseScore * 0.2); // 펀더멘탈 = 전문가 30% + 내부자 30% + 재무 20% + 실적 20%
+                
+                let compositeScore = (hypeScore * 0.3) + (valueScore * 0.7); // 최종 점수 = 관심도 30% + 펀더멘탈 70%
+
                 // ✨ FIX: 시가총액 기준으로 스타일을 동적으로 결정하고 Redis에 저장
                 let existingInfo; // ✨ FIX: existingInfo를 루프 상단에 선언하여 스코프 문제 해결
                 let style = 'growth'; // 기본값
