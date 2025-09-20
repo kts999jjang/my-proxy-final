@@ -65,18 +65,19 @@ async function getMarketCap(ticker) {
 }
 /**
  * Finnhub API를 사용해 내부자 거래 동향을 조회하는 함수
- * @param {string} ticker - 주식 티커
- * @returns {Promise<number>} 내부자 거래 점수
+ * @param {string} ticker
+ * @returns {Promise<object|null>}
  */
-async function getCompanyProfile(ticker) {
-    const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
+async function getBasicFinancials(ticker) {
+    const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
     try {
-        await sleep(1100); // API 호출 제한 준수 (분당 60회)
+        await sleep(1100);
         const response = await fetch(url);
         if (!response.ok) return null;
-        return await response.json();
+        const data = await response.json();
+        return data?.metric || null;
     } catch (e) {
-        console.warn(`  - ${ticker}의 프로필 조회 중 오류: ${e.message}`);
+        console.warn(`  - ${ticker}의 기본 재무 정보 조회 중 오류: ${e.message}`);
         return null;
     }
 }
