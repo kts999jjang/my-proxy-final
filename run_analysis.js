@@ -378,6 +378,14 @@ async function main() {
                     kTickerInfo[ticker] = JSON.stringify(stockInfo); // ✨ FIX: 메모리 내 kTickerInfo에도 항상 JSON 문자열을 저장하여 데이터 형식을 일관되게 유지
                 }
 
+                // ✨ FIX: 상세 페이지에서 사용할 수 있도록, 추천 근거가 된 뉴스 기사 목록을 찾습니다.
+                let relevantArticlesForStock = [];
+                if (existingInfo && existingInfo.keywords) {
+                    relevantArticlesForStock = allFoundArticles.filter(a => 
+                        existingInfo.keywords.some(kw => a.title.toLowerCase().includes(kw))
+                    );
+                }
+
                 console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스언급: ${newsScore}, 내부자: ${insiderScore}, 애널리스트: ${analystScore}, 서프라이즈: ${surpriseScore}, 재무: ${financialsScore.toFixed(1)}, 감성: ${sentimentScore.toFixed(1)}, 시총: ${marketCap ? (marketCap/1e9).toFixed(1)+'B' : 'N/A'})`);
                 scoredStocks.push({ 
                     ticker, 
@@ -390,7 +398,8 @@ async function main() {
                         surpriseScore,
                         financialsScore,
                         sentimentScore,
-                    }
+                    },
+                    relevantArticles: relevantArticlesForStock.slice(0, 10) // 상위 10개 뉴스만 저장
                 });
             }
 

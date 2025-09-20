@@ -130,52 +130,26 @@ app.get('/api/details', async (req, res) => {
   try {
     const { ticker, theme } = req.query;
     if (!ticker) { return res.status(400).json({ error: 'Ticker is required' }); }
-    
+
     const stockData = await fetchStockDataFromYahoo(ticker);
     if (!stockData) { return res.status(404).json({ error: 'Stock data not found' }); }
 
-    const pinecone = new Pinecone();
-    const index = pinecone.index('gcp-starter-gemini');
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-    
-    // ✨ FIX: 회사 이름 대신 테마 쿼리를 임베딩하여 뉴스 검색의 일관성 확보
-    const { kInvestmentThemes } = require('./constants');
-    const themeQuery = kInvestmentThemes[theme]?.query || ticker; // 해당 테마의 쿼리를 가져옴
-    const embeddingResult = await embeddingModel.embedContent({ content: { parts: [{ text: themeQuery }] }, taskType: "RETRIEVAL_QUERY" });
-    const queryVector = embeddingResult.embedding.values;
-    
-    const queryResult = await index.query({ 
-        topK: 500, // run_analysis.js와 동일하게 검색 기사 수를 늘림
-        vector: queryVector, 
-        includeMetadata: true,
-        filter: { "theme": { "$eq": theme } } // ✨ FIX: Pinecone 쿼리에 테마 필터 추가
-    });
-    const allFoundArticles = queryResult.matches.map(match => match.metadata);
+    // ✨ FIX: 실시간 분석 대신 Redis에 저장된 분석 결과를 사용합니다.
+    const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+    const recommendationsData = await redis.get('latest_recommendations');
+    if (!recommendationsData) return res.status(404).json({ error: 'Recommendation data not found in cache.' });
+
+    const recommendations = recommendationsData.results[theme];
+    const allRecommendedStocks = [...(recommendations?.leading || []), ...(recommendations?.growth || [])];
+    const stockInfo = allRecommendedStocks.find(s => s.ticker === ticker);
+    const relevantArticles = stockInfo?.relevantArticles || [];
 
     const { timestamps, indicators } = stockData;
     const quotes = indicators?.quote?.[0]?.close?.filter(q => q != null) || [];
     const smaShort = calculateSMA(quotes, 5);
     const smaLong = calculateSMA(quotes, 20);
     const rsi14 = calculateRSI(quotes, 14);
-    
-    // ✨ FIX: kTickerInfo에서 키워드를 안전하게 파싱하여 사용
-    let searchKeywords = [ticker.toLowerCase()];
-    const infoValue = kTickerInfo[ticker];
-    if (infoValue) {
-        if (typeof infoValue === 'string') {
-            try {
-                const info = JSON.parse(infoValue);
-                searchKeywords = info.keywords || [ticker.toLowerCase()];
-            } catch (e) {
-                console.error(`[DETAILS DEBUG] Failed to parse kTickerInfo for ${ticker}. Value:`, infoValue);
-            }
-        } else if (typeof infoValue === 'object' && infoValue.keywords) {
-            searchKeywords = infoValue.keywords;
-        }
-    }
-    const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw)));
-    
+
     const dailyNewsStats = {};
     relevantArticles.forEach(article => {
         if (article.publishedAt) {
@@ -189,7 +163,7 @@ app.get('/api/details', async (req, res) => {
         
     const finalData = {
       ticker,
-      companyName: kTickerInfo[ticker]?.name || ticker,
+      companyName: stockInfo?.companyName || ticker,
       latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0,
       chartData: quotes.map((q, i) => ({ x: i, y: q })),
       timestamps: timestamps || [],
