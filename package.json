@@ -6,9 +6,10 @@
     "@pinecone-database/pinecone": "^2.2.2",
     "@upstash/redis": "^1.31.5",
     "compromise": "^14.13.0",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.1",
-    "node-fetch": "^2.6.7",
     "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "express-session": "^1.18.2",
+    "node-fetch": "^2.6.7"
   }
 }

@@ -232,7 +232,7 @@ async function main() {
     const pinecone = new Pinecone();
     const index = pinecone.index('gcp-starter-gemini');
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const embeddingModel = genAI.getGenerativeMoㄴdel({ model: "text-embedding-004" });
+    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
     const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL,
         token: process.env.UPSTASH_REDIS_REST_TOKEN,

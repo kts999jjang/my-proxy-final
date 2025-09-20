@@ -2,6 +2,7 @@ require('dotenv').config();
 const fetch = require('node-fetch');
 const { Pinecone } = require('@pinecone-database/pinecone');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { Redis } = require('@upstash/redis');
 
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
@@ -25,7 +26,22 @@ async function main() {
   const index = pinecone.index(INDEX_NAME);
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+  const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
 
+  // ✨ FIX: 스크립트 시작 시 Pinecone 인덱스의 현재 벡터 수를 확인
+  const stats = await index.describeIndexStats();
+  const totalVectors = stats.totalVectorCount || 0;
+  const dateRange = await redis.get('news_date_range');
+  const { oldest, newest } = dateRange || { oldest: 'N/A', newest: 'N/A' };
+
+  console.log(`
+    --- 데이터 현황 ---
+    - Pinecone 벡터 수: ${totalVectors}개
+    - 뉴스 데이터 기간: ${oldest} ~ ${newest}
+  `);
   console.log("1. GNews에서 뉴스 기사를 수집합니다...");
   let allArticles = [];
   
@@ -106,6 +122,14 @@ async function main() {
   }
   
   console.log("\n✨ 데이터 준비가 완료되었습니다!");
+  // ✨ FIX: 데이터 기간을 Redis에 저장
+  if (uniqueArticles.length > 0) {
+    const timestamps = uniqueArticles.map(a => new Date(a.publishedAt).getTime());
+    const oldestDate = new Date(Math.min(...timestamps)).toISOString().split('T')[0];
+    const newestDate = new Date(Math.max(...timestamps)).toISOString().split('T')[0];
+    await redis.set('news_date_range', { oldest: oldestDate, newest: newestDate });
+    console.log(`\n데이터 기간을 Redis에 저장했습니다: ${oldestDate} ~ ${newestDate}`);
+  }
 }
 
 main().catch(console.error);

@@ -8,6 +8,8 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const nlp = require('compromise'); // ✨ FIX: nlp 라이브러리 선언 추가
+const session = require('express-session'); // ✨ FIX: express-session 추가
+const path = require('path'); // ✨ FIX: path 모듈 추가
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -17,6 +19,13 @@ let kTickerInfo = {};
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public'))); // ✨ FIX: 'public' 폴더를 정적 파일 경로로 설정
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'a-very-secret-key', // ✨ FIX: .env 파일에 SESSION_SECRET을 추가하세요.
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: process.env.NODE_ENV === 'production' } // HTTPS 환경에서는 true로 설정
+}));
 app.use(express.urlencoded({ extended: true })); // For form submissions
 
 // ✨ FIX: 서버 시작 시 Redis에서 주식 정보를 로드하는 함수
@@ -117,121 +126,54 @@ app.get('/api/themes', async (req, res) => {
   }
 });
 
-// --- Admin Dashboard ---
+// --- Admin Auth ---
 
-const getAdminDashboardHTML = () => `
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>주식 정보 대시보드</title>
-    <style>
-        body { font-family: sans-serif; background-color: #121212; color: #e0e0e0; margin: 20px; }
-        h1, h2 { color: #fff; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { padding: 12px; border: 1px solid #444; text-align: left; }
-        th { background-color: #1f1f1f; }
-        tr:nth-child(even) { background-color: #2c2c2c; }
-        form { background-color: #1f1f1f; padding: 20px; border-radius: 8px; margin-top: 20px; }
-        input, select, button { padding: 10px; margin-right: 10px; border-radius: 4px; border: 1px solid #555; background-color: #333; color: #fff; }
-        button { cursor: pointer; background-color: #007bff; border-color: #007bff; }
-        .delete-btn { background-color: #dc3545; border-color: #dc3545; }
-    </style>
-</head>
-<body>
-    <h1>주식 정보 대시보드</h1>
-    
-    <h2>주식 추가 / 업데이트</h2>
-    <form id="stock-form">
-        <input type="text" id="ticker" placeholder="티커 (예: NVDA)" required>
-        <input type="text" id="name" placeholder="회사명" required>
-        <select id="style" required>
-            <option value="leading">주도주</option>
-            <option value="growth">성장주</option>
-        </select>
-        <input type="text" id="keywords" placeholder="키워드 (쉼표로 구분)">
-        <input type="password" id="password" placeholder="관리자 비밀번호" required>
-        <button type="submit">저장</button>
-    </form>
+const requireLogin = (req, res, next) => {
+  if (req.session && req.session.isAdmin) {
+    return next();
+  } else {
+    res.redirect('/admin/login');
+  }
+};
 
-    <h2>Redis에 저장된 주식 목록</h2>
-    <table id="stocks-table">
-        <thead>
-            <tr>
-                <th>티커</th>
-                <th>회사명</th>
-                <th>스타일</th>
-                <th>키워드</th>
-                <th>작업</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+app.get('/admin/login', (req, res) => {
+    res.send(`
+        <style>body{font-family:sans-serif;background:#121212;color:#e0e0e0;display:flex;justify-content:center;align-items:center;height:100vh}form{background:#1e1e1e;padding:2rem;border-radius:8px;width:300px}input{width:100%;padding:0.75rem;margin-bottom:1rem;border-radius:4px;border:1px solid #333;background:#252525;color:#fff}button{width:100%;padding:0.75rem;border:none;border-radius:4px;background:#3a7cfd;color:#fff;cursor:pointer}</style>
+        <form action="/admin/login" method="POST">
+            <h2>관리자 로그인</h2>
+            <input type="password" name="password" placeholder="비밀번호" required>
+            <button type="submit">로그인</button>
+        </form>
+    `);
+});
 
-    <script>
-        const stockForm = document.getElementById('stock-form');
-        const stocksTableBody = document.querySelector('#stocks-table tbody');
+app.post('/admin/login', (req, res) => {
+    const { password } = req.body;
+    if (password === process.env.ADMIN_PASSWORD) {
+        req.session.isAdmin = true;
+        res.redirect('/admin/dashboard');
+    } else {
+        res.redirect('/admin/login');
+    }
+});
 
-        async function fetchStocks() {
-            const response = await fetch('/admin/api/stocks');
-            const stocks = await response.json();
-            stocksTableBody.innerHTML = '';
-            for (const ticker in stocks) {
-                const info = JSON.parse(stocks[ticker] || '{}'); // JSON 문자열을 객체로 파싱, null일 경우 빈 객체로 처리
-                const row = document.createElement('tr');
-                row.innerHTML = \`
-                    <td>\${ticker}</td>
-                    <td>\${info.name || ''}</td>
-                    <td>\${info.style || ''}</td>
-                    <td>\${(info.keywords || []).join(', ')}</td>
-                    <td><button class="delete-btn" onclick="deleteStock('\${ticker}')">삭제</button></td>
-                \`;
-                stocksTableBody.appendChild(row);
-            }
+app.get('/admin/logout', (req, res) => {
+    req.session.destroy(err => {
+        if (err) {
+            return res.redirect('/admin/dashboard');
         }
+        res.clearCookie('connect.sid');
+        res.redirect('/admin/login');
+    });
+});
 
-        stockForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const ticker = document.getElementById('ticker').value.toUpperCase();
-            const name = document.getElementById('name').value;
-            const style = document.getElementById('style').value;
-            const keywords = document.getElementById('keywords').value.split(',').map(k => k.trim()).filter(Boolean);
-            const password = document.getElementById('password').value;
-
-            await fetch('/admin/api/stocks', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker, name, style, keywords, password })
-            });
-            stockForm.reset();
-            fetchStocks();
-        });
-
-        async function deleteStock(ticker) {
-            const password = prompt('삭제하려면 관리자 비밀번호를 입력하세요:');
-            if (!password) return;
-
-            await fetch('/admin/api/stocks', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker, password })
-            });
-            fetchStocks();
-        }
-
-        fetchStocks();
-    </script>
-</body>
-</html>
-`;
-
-app.get('/admin/dashboard', (req, res) => {
-    res.send(getAdminDashboardHTML());
+app.get('/admin/dashboard', requireLogin, (req, res) => {
+    // ✨ FIX: 'public' 폴더의 admin.html 파일을 전송
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 // '/api/details' 경로: 특정 종목의 상세 정보를 실시간으로 조회
-app.get('/api/details', async (req, res) => {
+app.get('/api/details', requireLogin, async (req, res) => {
   console.log(`Received request for /api/details with ticker: ${req.query.ticker}`);
   try {
     const { ticker, theme } = req.query;
@@ -296,7 +238,31 @@ app.get('/api/details', async (req, res) => {
 });
 
 // Admin API Endpoints
-app.get('/admin/api/stocks', async (req, res) => {
+app.get('/admin/api/stats', requireLogin, async (req, res) => {
+    try {
+        const pinecone = new Pinecone();
+        const index = pinecone.index('gcp-starter-gemini');
+        const pineconeStats = await index.describeIndexStats();
+
+        const redis = new Redis({
+            url: process.env.UPSTASH_REDIS_REST_URL,
+            token: process.env.UPSTASH_REDIS_REST_TOKEN,
+        });
+        const newsDateRange = await redis.get('news_date_range') || { oldest: 'N/A', newest: 'N/A' };
+        const redisStockCount = await redis.hlen('stock-info');
+
+        res.json({
+            pineconeVectors: pineconeStats.totalVectorCount || 0,
+            newsDateRange,
+            redisStockCount,
+        });
+    } catch (error) {
+        console.error('Stats API Error:', error);
+        res.status(500).json({ error: 'Failed to fetch stats.' });
+    }
+});
+
+app.get('/admin/api/stocks', requireLogin, async (req, res) => {
     try {
         const redis = new Redis({
             url: process.env.UPSTASH_REDIS_REST_URL,
@@ -309,7 +275,7 @@ app.get('/admin/api/stocks', async (req, res) => {
     }
 });
 
-app.post('/admin/api/stocks', async (req, res) => {
+app.post('/admin/api/stocks', requireLogin, async (req, res) => {
     const { ticker, name, style, keywords, password } = req.body;
     if (password !== process.env.ADMIN_PASSWORD) {
         return res.status(403).json({ error: 'Invalid password.' });
@@ -331,7 +297,7 @@ app.post('/admin/api/stocks', async (req, res) => {
     }
 });
 
-app.delete('/admin/api/stocks', async (req, res) => {
+app.delete('/admin/api/stocks', requireLogin, async (req, res) => {
     const { ticker, password } = req.body;
     if (password !== process.env.ADMIN_PASSWORD) {
         return res.status(403).json({ error: 'Invalid password.' });
