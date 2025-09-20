@@ -150,6 +150,36 @@ async function getFinancialsMetric(ticker, metricName) {
 }
 
 /**
+ * Finnhub API를 사용해 향후 실적 가이던스를 분석하고 점수를 매기는 함수
+ * @param {string} ticker - 주식 티커
+ * @returns {Promise<number>} 가이던스 점수
+ */
+async function getGuidanceScore(ticker) {
+    const url = `https://finnhub.io/api/v1/stock/eps-estimates?symbol=${ticker}&freq=quarterly&token=${process.env.FINNHUB_API_KEY}`;
+    try {
+        await sleep(1100); // API 호출 제한 준수
+        const response = await fetch(url);
+        const data = await response.json();
+
+        // 향후 4분기의 EPS 추정치를 가져옴
+        const estimates = data?.data?.slice(0, 4) || [];
+        if (estimates.length < 2) return 0;
+
+        // EPS 추정치가 증가하는 분기의 수를 계산
+        let positiveTrendCount = 0;
+        for (let i = 1; i < estimates.length; i++) {
+            if (estimates[i].epsEstimate > estimates[i - 1].epsEstimate) {
+                positiveTrendCount++;
+            }
+        }
+        return (positiveTrendCount / (estimates.length - 1)) * 10; // 0~10점 척도로 변환
+    } catch (e) {
+        console.warn(`  - ${ticker}의 가이던스 조회 중 오류: ${e.message}`);
+        return 0;
+    }
+}
+
+/**
  * Finnhub API를 사용해 어닝 서프라이즈 정보를 조회하는 함수
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 어닝 서프라이즈 점수
@@ -331,7 +361,8 @@ async function main() {
                 getInsiderSentimentScore(ticker),
                 getAnalystRatingScore(ticker),
                 getEarningsSurpriseScore(ticker),
-                getFinancialsScore(ticker)
+                getFinancialsScore(ticker),
+                getGuidanceScore(ticker) // ✨ FIX: 가이던스 점수 조회 추가
             ]));
             const analysisResults = await Promise.all(analysisPromises);
 
@@ -339,13 +370,13 @@ async function main() {
             const scoredStocks = [];
             for (let i = 0; i < candidatesForAnalysis.length; i++) {
                 const { ticker, newsScore } = candidatesForAnalysis[i];
-                const [insiderScore, analystScore, surpriseScore, financialsScore] = analysisResults[i];
+                const [insiderScore, analystScore, surpriseScore, financialsScore, guidanceScore] = analysisResults[i];
                 const marketCap = marketCapCache.get(ticker); // 캐시에서 시가총액 조회
                 const sentimentScore = analyzeLocalNewsSentiment(ticker, allFoundArticles, kTickerInfo);
 
                 // ✨ FIX: 점수 체계를 '관심도'와 '펀더멘탈'로 분리
                 const hypeScore = (newsScore * 0.6) + (sentimentScore * 0.4); // 관심도 = 언급량 60% + 감성 40%
-                const valueScore = (analystScore * 0.3) + (insiderScore * 0.3) + (financialsScore * 0.2) + (surpriseScore * 0.2); // 펀더멘탈 = 전문가 30% + 내부자 30% + 재무 20% + 실적 20%
+                const valueScore = (analystScore * 0.25) + (insiderScore * 0.25) + (financialsScore * 0.15) + (surpriseScore * 0.15) + (guidanceScore * 0.2); // 펀더멘탈 점수에 가이던스 20% 반영
                 
                 let compositeScore = (hypeScore * 0.3) + (valueScore * 0.7); // 최종 점수 = 관심도 30% + 펀더멘탈 70%
 
