@@ -82,6 +82,30 @@ async function getCompanyProfile(ticker) {
 }
 
 /**
+ * Yahoo Finance에서 특정 티커의 현재가를 조회합니다.
+ * @param {string} ticker
+ * @returns {Promise<number|null>}
+ */
+async function getCurrentPriceFromYahoo(ticker) {
+    if (!ticker) return null;
+    try {
+        // 1일치 데이터만 요청하여 가장 최신 가격을 가져옵니다.
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=1d&interval=1m`;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const data = await response.json();
+        const quotes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+        if (quotes && quotes.length > 0) {
+            return quotes[quotes.length - 1]; // 가장 마지막 가격을 현재가로 사용
+        }
+        return null;
+    } catch (e) {
+        console.warn(`  - ${ticker}의 Yahoo Finance 현재가 조회 중 오류: ${e.message}`);
+        return null;
+    }
+}
+
+/**
  * Finnhub API를 사용해 애널리스트 추천 동향을 조회하는 함수
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 애널리스트 추천 점수
@@ -146,42 +170,6 @@ async function getFinancialsMetric(ticker, metricName) {
         return data?.metric ? data.metric[metricName] : null;
     } catch (e) {
         return null;
-    }
-}
-
-/**
- * Finnhub API를 사용해 향후 실적 가이던스를 분석하고 점수를 매기는 함수
- * @param {string} ticker - 주식 티커
- * @returns {Promise<number>} 가이던스 점수
- */
-async function getGuidanceScore(ticker) {
-    // ✨ FIX: Finnhub 대신 FMP API를 사용하여 가이던스 조회
-    const url = `https://financialmodelingprep.com/api/v3/analyst-estimates/${ticker}?limit=4&apikey=${process.env.FMP_API_KEY}`;
-    try {
-        await sleep(1100); // API 호출 제한 준수
-        const response = await fetch(url);
-        if (!response.ok) {
-            console.warn(`  - ${ticker}의 FMP 가이던스 조회 실패: Status ${response.status}`);
-            return 0;
-        }
-        const data = await response.json();
-
-        // FMP는 최신 분기부터 과거 순으로 데이터를 제공하므로, 순서를 뒤집어 시간 순으로 만듭니다.
-        const estimates = data?.slice(0, 4).reverse() || [];
-        if (estimates.length < 2) return 0;
-
-        // EPS 추정치가 증가하는 분기의 수를 계산
-        let positiveTrendCount = 0;
-        for (let i = 1; i < estimates.length; i++) { // ✨ FIX: 데이터 구조를 더 안전하게 확인
-            // FMP 응답 필드: estimatedEpsAvg
-            if (estimates[i] && estimates[i-1] && estimates[i].estimatedEpsAvg > estimates[i-1].estimatedEpsAvg) {
-                positiveTrendCount++;
-            }
-        }
-        return (positiveTrendCount / (estimates.length - 1)) * 10; // 0~10점 척도로 변환
-    } catch (e) {
-        console.warn(`  - ${ticker}의 가이던스 조회 중 오류: ${e.message}`);
-        return 0;
     }
 }
 
@@ -360,11 +348,11 @@ async function main() {
             // STEP 5: 내부자/애널리스트 점수만 병렬로 조회
             const tickersToAnalyze = candidatesForAnalysis.map(c => c.ticker);
             const analysisPromises = tickersToAnalyze.map(ticker => Promise.all([
-                getCompanyProfile(ticker), // ✨ FIX: 내부자/시총 정보를 한 번에 가져옴
+                getBasicFinancials(ticker), // ✨ FIX: 시총, 베타 등 핵심 지표를 한 번에 가져옴
                 getAnalystRatingScore(ticker),
                 getEarningsSurpriseScore(ticker),
                 getFinancialsScore(ticker),
-                getGuidanceScore(ticker) // ✨ FIX: 가이던스 점수 조회 추가
+                getCurrentPriceFromYahoo(ticker) // ✨ FIX: Yahoo Finance에서 현재가 조회
             ]));
             const analysisResults = await Promise.all(analysisPromises);
 
@@ -372,17 +360,25 @@ async function main() {
             const scoredStocks = [];
             for (let i = 0; i < candidatesForAnalysis.length; i++) {
                 const { ticker, newsScore } = candidatesForAnalysis[i];
-                const [profile, analystScore, surpriseScore, financialsScore, guidanceScore] = analysisResults[i];
+                const [basicFinancials, analystScore, surpriseScore, financialsScore, currentPrice] = analysisResults[i];
 
-                // ✨ FIX: 프로필에서 시가총액과 내부자 점수 추출
-                const marketCap = profile?.marketCapitalization || 0;
-                const insiderScore = (profile?.insiderPercent || 0) > 0.5 ? 10 : 0; // 내부자 지분이 0.5% 이상이면 10점
+                // ✨ FIX: 기본 재무 정보에서 새로운 지표 추출
+                const marketCap = basicFinancials?.marketCapitalization || 0;
+                
+                // '베타' 점수: 1보다 낮을수록 안정적이라고 판단하여 높은 점수 부여 (최대 10점)
+                const beta = basicFinancials?.beta || 1.5; // 데이터 없으면 1.5로 간주
+                const betaScore = Math.max(0, (1.5 - beta) / 1.5 * 10);
+
+                // '상승 잠재력' 점수: 52주 최고가 대비 현재가가 낮을수록 높은 점수 (최대 10점)
+                const high52w = basicFinancials?.['52WeekHigh'];
+                const low52w = basicFinancials?.['52WeekLow'];
+                const potentialScore = (high52w && currentPrice) ? ((high52w - currentPrice) / (high52w - low52w || 1)) * 10 : 0;
 
                 const sentimentScore = analyzeLocalNewsSentiment(ticker, allFoundArticles, kTickerInfo);
 
                 // ✨ FIX: 점수 체계를 '관심도'와 '펀더멘탈'로 분리
                 const hypeScore = (newsScore * 0.6) + (sentimentScore * 0.4); // 관심도 = 언급량 60% + 감성 40%
-                const valueScore = (analystScore * 0.25) + (insiderScore * 0.25) + (financialsScore * 0.15) + (surpriseScore * 0.15) + (guidanceScore * 0.2); // 펀더멘탈 점수에 가이던스 20% 반영
+                const valueScore = (analystScore * 0.3) + (betaScore * 0.2) + (financialsScore * 0.2) + (surpriseScore * 0.15) + (potentialScore * 0.15); // 펀더멘탈 점수 재구성
                 
                 let compositeScore = (hypeScore * 0.3) + (valueScore * 0.7); // 최종 점수 = 관심도 30% + 펀더멘탈 70%
 
@@ -431,8 +427,8 @@ async function main() {
                     score: compositeScore, 
                     companyName: kTickerInfo[ticker]?.name || ticker, // Redis에서 로드된 정보 사용
                     reason: {
-                        newsScore,
-                        insiderScore,
+                        newsScore, // 이 값들은 이제 hypeScore, valueScore로 통합됨
+                        insiderScore: betaScore, // '내부자' 항목을 '베타' 점수로 대체
                         analystScore,
                         surpriseScore,
                         financialsScore,
