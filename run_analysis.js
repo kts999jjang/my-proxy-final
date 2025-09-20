@@ -348,6 +348,7 @@ async function main() {
                 let compositeScore = (newsScore * weights.news) + (insiderScore * weights.insider) + (analystScore * weights.analyst) +
                                      (surpriseScore * weights.surprise) + (financialsScore * weights.financials) + (sentimentScore * weights.sentiment);
                 // ✨ FIX: 시가총액 기준으로 스타일을 동적으로 결정하고 Redis에 저장
+                let existingInfo; // ✨ FIX: existingInfo를 루프 상단에 선언하여 스코프 문제 해결
                 let style = 'growth'; // 기본값
                 // 시가총액이 낮을수록 보너스 점수 부여 (숨은 보석 찾기)
                 if (marketCap) {
@@ -359,7 +360,6 @@ async function main() {
                     }
                     // Redis에 최신 정보 저장
                     // ✨ FIX: kTickerInfo에서 name을 안전하게 파싱하여 사용
-                    let existingInfo;
                     const infoValue = kTickerInfo[ticker];
                     if (typeof infoValue === 'string') {
                         try {
