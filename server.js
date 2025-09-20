@@ -8,7 +8,6 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const nlp = require('compromise'); // ✨ FIX: nlp 라이브러리 선언 추가
-const session = require('express-session'); // ✨ FIX: express-session 추가
 const path = require('path'); // ✨ FIX: path 모듈 추가
 
 const app = express();
@@ -20,12 +19,6 @@ let kTickerInfo = {};
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public'))); // ✨ FIX: 'public' 폴더를 정적 파일 경로로 설정
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'a-very-secret-key', // ✨ FIX: .env 파일에 SESSION_SECRET을 추가하세요.
-  resave: false,
-  saveUninitialized: true,
-  cookie: { secure: process.env.NODE_ENV === 'production' } // HTTPS 환경에서는 true로 설정
-}));
 app.use(express.urlencoded({ extended: true })); // For form submissions
 
 // ✨ FIX: 서버 시작 시 Redis에서 주식 정보를 로드하는 함수
@@ -126,58 +119,13 @@ app.get('/api/themes', async (req, res) => {
   }
 });
 
-// --- Admin Auth ---
-
-const requireLogin = (req, res, next) => {
-  if (req.session && req.session.isAdmin) {
-    return next();
-  } else {
-    // ✨ FIX: API 요청에 대해서는 JSON 오류를, 브라우저 요청에 대해서는 리디렉션을 반환
-    if (req.path.startsWith('/admin/api/') || req.path.startsWith('/api/')) {
-      return res.status(401).json({ error: 'Authentication required.' });
-    }
-    return res.redirect('/admin/login');
-  }
-};
-
-app.get('/admin/login', (req, res) => {
-    res.send(`
-        <style>body{font-family:sans-serif;background:#121212;color:#e0e0e0;display:flex;justify-content:center;align-items:center;height:100vh}form{background:#1e1e1e;padding:2rem;border-radius:8px;width:300px}input{width:100%;padding:0.75rem;margin-bottom:1rem;border-radius:4px;border:1px solid #333;background:#252525;color:#fff}button{width:100%;padding:0.75rem;border:none;border-radius:4px;background:#3a7cfd;color:#fff;cursor:pointer}</style>
-        <form action="/admin/login" method="POST">
-            <h2>관리자 로그인</h2>
-            <input type="password" name="password" placeholder="비밀번호" required>
-            <button type="submit">로그인</button>
-        </form>
-    `);
-});
-
-app.post('/admin/login', (req, res) => {
-    const { password } = req.body;
-    if (password === process.env.ADMIN_PASSWORD) {
-        req.session.isAdmin = true;
-        res.redirect('/admin/dashboard');
-    } else {
-        res.redirect('/admin/login');
-    }
-});
-
-app.get('/admin/logout', (req, res) => {
-    req.session.destroy(err => {
-        if (err) {
-            return res.redirect('/admin/dashboard');
-        }
-        res.clearCookie('connect.sid');
-        res.redirect('/admin/login');
-    });
-});
-
-app.get('/admin/dashboard', requireLogin, (req, res) => {
+app.get('/dashboard', (req, res) => {
     // ✨ FIX: 'public' 폴더의 admin.html 파일을 전송
     res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 // '/api/details' 경로: 특정 종목의 상세 정보를 실시간으로 조회
-app.get('/api/details', requireLogin, async (req, res) => {
+app.get('/api/details', async (req, res) => {
   console.log(`Received request for /api/details with ticker: ${req.query.ticker}`);
   try {
     const { ticker, theme } = req.query;
@@ -242,7 +190,7 @@ app.get('/api/details', requireLogin, async (req, res) => {
 });
 
 // Admin API Endpoints
-app.get('/admin/api/stats', requireLogin, async (req, res) => {
+app.get('/api/stats', async (req, res) => {
     try {
         const pinecone = new Pinecone();
         const index = pinecone.index('gcp-starter-gemini');
@@ -266,7 +214,7 @@ app.get('/admin/api/stats', requireLogin, async (req, res) => {
     }
 });
 
-app.get('/admin/api/stocks', requireLogin, async (req, res) => {
+app.get('/api/stocks', async (req, res) => {
     try {
         const redis = new Redis({
             url: process.env.UPSTASH_REDIS_REST_URL,
@@ -279,11 +227,8 @@ app.get('/admin/api/stocks', requireLogin, async (req, res) => {
     }
 });
 
-app.post('/admin/api/stocks', requireLogin, async (req, res) => {
+app.post('/api/stocks', async (req, res) => {
     const { ticker, name, style, keywords, password } = req.body;
-    if (password !== process.env.ADMIN_PASSWORD) {
-        return res.status(403).json({ error: 'Invalid password.' });
-    }
     if (!ticker || !name || !style) {
         return res.status(400).json({ error: 'Ticker, name, and style are required.' });
     }
@@ -301,11 +246,8 @@ app.post('/admin/api/stocks', requireLogin, async (req, res) => {
     }
 });
 
-app.delete('/admin/api/stocks', requireLogin, async (req, res) => {
+app.delete('/api/stocks', async (req, res) => {
     const { ticker, password } = req.body;
-    if (password !== process.env.ADMIN_PASSWORD) {
-        return res.status(403).json({ error: 'Invalid password.' });
-    }
     if (!ticker) {
         return res.status(400).json({ error: 'Ticker is required.' });
     }
