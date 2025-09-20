@@ -423,19 +423,23 @@ async function main() {
                 }
 
                 console.log(`  - [${ticker}] 점수: ${compositeScore.toFixed(2)} (뉴스언급: ${newsScore}, 베타: ${betaScore.toFixed(1)}, 애널리스트: ${analystScore}, 서프라이즈: ${surpriseScore}, 재무: ${financialsScore.toFixed(1)}, 감성: ${sentimentScore.toFixed(1)}, 시총: ${marketCap ? (marketCap/1000).toFixed(1)+'B' : 'N/A'})`);
+                // ✨ FIX: hypeScore와 valueScore를 scoredStocks 객체에 올바르게 추가
                 scoredStocks.push({ 
                     ticker, 
                     score: compositeScore, 
-                    companyName: kTickerInfo[ticker]?.name || ticker, // Redis에서 로드된 정보 사용
+                    companyName: existingInfo?.name || ticker,
                     reason: {
-                        newsScore, // 이 값들은 이제 hypeScore, valueScore로 통합됨
+                        newsScore,
                         insiderScore: betaScore, // '내부자' 항목을 '베타' 점수로 대체
                         analystScore,
                         surpriseScore,
                         financialsScore,
                         sentimentScore,
+                        potentialScore, // '상승 잠재력' 점수 추가
                     },
-                    relevantArticles: relevantArticlesForStock.slice(0, 10) // 상위 10개 뉴스만 저장
+                    relevantArticles: relevantArticlesForStock.slice(0, 10),
+                    hypeScore,
+                    valueScore,
                 });
             }
 
@@ -447,8 +451,20 @@ async function main() {
                 .slice(0, 10);
             
             if (finalRecommendations.length > 0) {
-                const leading = finalRecommendations.filter(s => kTickerInfo[s.ticker]?.style === 'leading');
-                const growth = finalRecommendations.filter(s => kTickerInfo[s.ticker]?.style !== 'leading');
+                const leading = finalRecommendations.filter(s => {
+                    try {
+                        return JSON.parse(kTickerInfo[s.ticker]).style === 'leading';
+                    } catch {
+                        return false;
+                    }
+                });
+                const growth = finalRecommendations.filter(s => {
+                     try {
+                        return JSON.parse(kTickerInfo[s.ticker]).style !== 'leading';
+                    } catch {
+                        return true;
+                    }
+                });
                 finalResults[themeName] = { leading, growth };
                 console.log(`  - ${finalRecommendations.length}개의 추천 종목 선정 완료 (주도주: ${leading.length}, 성장주: ${growth.length}).`);
             }
