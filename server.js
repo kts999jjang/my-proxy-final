@@ -120,8 +120,8 @@ app.get('/api/themes', async (req, res) => {
 });
 
 app.get('/dashboard', (req, res) => {
-    // ✨ FIX: 'public' 폴더의 admin.html 파일을 전송
-    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+    // ✨ FIX: 'public' 폴더의 dashboard.html 파일을 전송하도록 수정
+    res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
 // '/api/details' 경로: 특정 종목의 상세 정보를 실시간으로 조회
