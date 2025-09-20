@@ -143,7 +143,12 @@ app.get('/api/details', async (req, res) => {
     const embeddingResult = await embeddingModel.embedContent(companyNameForEmbedding);
     const queryVector = embeddingResult.embedding.values;
     
-    const queryResult = await index.query({ topK: 100, vector: queryVector, includeMetadata: true });
+    const queryResult = await index.query({ 
+        topK: 100, 
+        vector: queryVector, 
+        includeMetadata: true,
+        filter: { "theme": { "$eq": theme } } // ✨ FIX: Pinecone 쿼리에 테마 필터 추가
+    });
     const allFoundArticles = queryResult.matches.map(match => match.metadata);
 
     const { timestamps, indicators } = stockData;
