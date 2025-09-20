@@ -163,7 +163,7 @@ app.get('/api/details', async (req, res) => {
         
     const finalData = {
       ticker,
-      companyName: stockInfo?.companyName || ticker,
+      companyName: stockInfo?.companyName || kTickerInfo[ticker]?.name || ticker,
       latestPrice: quotes.length > 0 ? quotes[quotes.length-1] : 0,
       chartData: quotes.map((q, i) => ({ x: i, y: q })),
       timestamps: timestamps || [],
