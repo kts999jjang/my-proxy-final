@@ -132,7 +132,11 @@ const requireLogin = (req, res, next) => {
   if (req.session && req.session.isAdmin) {
     return next();
   } else {
-    res.redirect('/admin/login');
+    // ✨ FIX: API 요청에 대해서는 JSON 오류를, 브라우저 요청에 대해서는 리디렉션을 반환
+    if (req.path.startsWith('/admin/api/') || req.path.startsWith('/api/')) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    return res.redirect('/admin/login');
   }
 };
 
