@@ -91,6 +91,10 @@ async function getAnalystRatingScore(ticker) {
     try {
         await sleep(1100); // API 호출 제한 준수
         const response = await fetch(url);
+        if (!response.ok) {
+            console.warn(`  - ${ticker}의 애널리스트 평가 조회 실패: Status ${response.status}`);
+            return 0;
+        }
         const data = (await response.json())?.[0];
         // 'strongBuy'와 'buy'의 합을 점수로 활용
         return (data?.strongBuy || 0) * 2 + (data?.buy || 0);
@@ -151,27 +155,26 @@ async function getFinancialsMetric(ticker, metricName) {
  * @returns {Promise<number>} 가이던스 점수
  */
 async function getGuidanceScore(ticker) {
-    const url = `https://finnhub.io/api/v1/stock/eps-estimates?symbol=${ticker}&freq=quarterly&token=${process.env.FINNHUB_API_KEY}`;
+    // ✨ FIX: Finnhub 대신 FMP API를 사용하여 가이던스 조회
+    const url = `https://financialmodelingprep.com/api/v3/analyst-estimates/${ticker}?limit=4&apikey=${process.env.FMP_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
         const response = await fetch(url);
-        const text = await response.text();
-        let data;
-        try {
-            data = JSON.parse(text);
-        } catch (e) {
-            console.warn(`  - ${ticker}의 가이던스 API가 유효하지 않은 응답을 반환했습니다.`);
+        if (!response.ok) {
+            console.warn(`  - ${ticker}의 FMP 가이던스 조회 실패: Status ${response.status}`);
             return 0;
         }
+        const data = await response.json();
 
-        // 향후 4분기의 EPS 추정치를 가져옴
-        const estimates = data?.data?.slice(0, 4) || [];
+        // FMP는 최신 분기부터 과거 순으로 데이터를 제공하므로, 순서를 뒤집어 시간 순으로 만듭니다.
+        const estimates = data?.slice(0, 4).reverse() || [];
         if (estimates.length < 2) return 0;
 
         // EPS 추정치가 증가하는 분기의 수를 계산
         let positiveTrendCount = 0;
         for (let i = 1; i < estimates.length; i++) { // ✨ FIX: 데이터 구조를 더 안전하게 확인
-            if (estimates[i] && estimates[i-1] && estimates[i].epsEstimate > estimates[i-1].epsEstimate) {
+            // FMP 응답 필드: estimatedEpsAvg
+            if (estimates[i] && estimates[i-1] && estimates[i].estimatedEpsAvg > estimates[i-1].estimatedEpsAvg) {
                 positiveTrendCount++;
             }
         }
@@ -192,6 +195,10 @@ async function getEarningsSurpriseScore(ticker) {
     try {
         await sleep(1100); // API 호출 제한 준수
         const response = await fetch(url);
+        if (!response.ok) {
+            console.warn(`  - ${ticker}의 어닝 서프라이즈 조회 실패: Status ${response.status}`);
+            return 0;
+        }
         const data = await response.json();
         // 최근 4분기 동안 예상치를 상회한(positive surprise) 횟수를 점수로 활용
         const positiveSurprises = data?.filter(d => d.surprise > 0).length || 0;
