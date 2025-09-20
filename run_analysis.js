@@ -229,13 +229,10 @@ async function sendSlackNotification(message, color = 'good') {
 
 // --- 메인 실행 함수 ---
 async function main() {
-    const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 14);
-
     const pinecone = new Pinecone();
     const index = pinecone.index('gcp-starter-gemini');
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+    const embeddingModel = genAI.getGenerativeMoㄴdel({ model: "text-embedding-004" });
     const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL,
         token: process.env.UPSTASH_REDIS_REST_TOKEN,
@@ -270,9 +267,8 @@ async function main() {
             const queryResult = await index.query({ 
                 topK: 500, 
                 vector: queryVector, 
-                includeMetadata: true,
-                // ✨ FIX 1: 테마별 뉴스 필터링을 위해 테마 이름을 메타데이터로 활용
-                filter: { "theme": { "$eq": themeName } }
+                includeMetadata: true, // ✨ FIX: 날짜 필터를 제거하고 테마 필터만 남김
+                filter: { "theme": { "$eq": themeName } },
             });
 
             const allFoundArticles = queryResult.matches.map(match => match.metadata);
