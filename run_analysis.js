@@ -68,20 +68,16 @@ async function getMarketCap(ticker) {
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number>} 내부자 거래 점수
  */
-async function getInsiderSentimentScore(ticker) {
-    const to = new Date().toISOString().split('T')[0];
-    const from = new Date(new Date().setMonth(new Date().getMonth() - 3)).toISOString().split('T')[0];
-    const url = `https://finnhub.io/api/v1/stock/insider-sentiment?symbol=${ticker}&from=${from}&to=${to}&token=${process.env.FINNHUB_API_KEY}`;
+async function getCompanyProfile(ticker) {
+    const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수 (분당 60회)
         const response = await fetch(url);
-        const data = await response.json();
-        // 월별 순매수(mspr)가 0보다 큰 달의 수를 점수로 활용 (최근 3개월)
-        const positiveMonths = data?.data?.filter(d => d.mspr > 0).length || 0;
-        return positiveMonths * 5; // 긍정적인 달 하나당 5점 부여
+        if (!response.ok) return null;
+        return await response.json();
     } catch (e) {
-        console.warn(`  - ${ticker}의 내부자 거래 조회 중 오류: ${e.message}`);
-        return 0;
+        console.warn(`  - ${ticker}의 프로필 조회 중 오류: ${e.message}`);
+        return null;
     }
 }
 
@@ -159,7 +155,14 @@ async function getGuidanceScore(ticker) {
     try {
         await sleep(1100); // API 호출 제한 준수
         const response = await fetch(url);
-        const data = await response.json();
+        const text = await response.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            console.warn(`  - ${ticker}의 가이던스 API가 유효하지 않은 응답을 반환했습니다.`);
+            return 0;
+        }
 
         // 향후 4분기의 EPS 추정치를 가져옴
         const estimates = data?.data?.slice(0, 4) || [];
@@ -167,8 +170,8 @@ async function getGuidanceScore(ticker) {
 
         // EPS 추정치가 증가하는 분기의 수를 계산
         let positiveTrendCount = 0;
-        for (let i = 1; i < estimates.length; i++) {
-            if (estimates[i].epsEstimate > estimates[i - 1].epsEstimate) {
+        for (let i = 1; i < estimates.length; i++) { // ✨ FIX: 데이터 구조를 더 안전하게 확인
+            if (estimates[i] && estimates[i-1] && estimates[i].epsEstimate > estimates[i-1].epsEstimate) {
                 positiveTrendCount++;
             }
         }
@@ -347,18 +350,10 @@ async function main() {
             
             console.log(`  - 상위 ${candidatesForAnalysis.length}개 후보 종목에 대한 심층 분석을 시작합니다...`);
 
-            // ✨ FIX 3: 시가총액을 미리 한 번만 조회하여 캐시에 저장
-            for (const candidate of candidatesForAnalysis) {
-                if (!marketCapCache.has(candidate.ticker)) {
-                    const marketCap = await getMarketCap(candidate.ticker);
-                    marketCapCache.set(candidate.ticker, marketCap);
-                }
-            }
-
             // STEP 5: 내부자/애널리스트 점수만 병렬로 조회
             const tickersToAnalyze = candidatesForAnalysis.map(c => c.ticker);
             const analysisPromises = tickersToAnalyze.map(ticker => Promise.all([
-                getInsiderSentimentScore(ticker),
+                getCompanyProfile(ticker), // ✨ FIX: 내부자/시총 정보를 한 번에 가져옴
                 getAnalystRatingScore(ticker),
                 getEarningsSurpriseScore(ticker),
                 getFinancialsScore(ticker),
@@ -370,8 +365,12 @@ async function main() {
             const scoredStocks = [];
             for (let i = 0; i < candidatesForAnalysis.length; i++) {
                 const { ticker, newsScore } = candidatesForAnalysis[i];
-                const [insiderScore, analystScore, surpriseScore, financialsScore, guidanceScore] = analysisResults[i];
-                const marketCap = marketCapCache.get(ticker); // 캐시에서 시가총액 조회
+                const [profile, analystScore, surpriseScore, financialsScore, guidanceScore] = analysisResults[i];
+
+                // ✨ FIX: 프로필에서 시가총액과 내부자 점수 추출
+                const marketCap = profile?.marketCapitalization || 0;
+                const insiderScore = (profile?.insiderPercent || 0) > 0.5 ? 10 : 0; // 내부자 지분이 0.5% 이상이면 10점
+
                 const sentimentScore = analyzeLocalNewsSentiment(ticker, allFoundArticles, kTickerInfo);
 
                 // ✨ FIX: 점수 체계를 '관심도'와 '펀더멘탈'로 분리
@@ -385,7 +384,7 @@ async function main() {
                 let style = 'growth'; // 기본값
                 // 시가총액이 낮을수록 보너스 점수 부여 (숨은 보석 찾기)
                 if (marketCap) {
-                    if (marketCap >= 100 * 1000 * 1000 * 1000) { // 1000억 달러 이상
+                    if (marketCap >= 100000) { // 시가총액 단위가 백만 달러이므로, 1000억 달러 = 100,000 백만 달러
                         style = 'leading';
                     } else {
                         const marketCapBonus = (1 - Math.min(marketCap, 100e9) / 100e9) * 10; // 최대 10점 보너스
