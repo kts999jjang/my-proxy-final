@@ -161,9 +161,18 @@ app.get('/api/details', async (req, res) => {
     
     // ✨ FIX: kTickerInfo에서 키워드를 안전하게 파싱하여 사용
     let searchKeywords = [ticker.toLowerCase()];
-    if (kTickerInfo[ticker]) {
-        const info = JSON.parse(kTickerInfo[ticker]);
-        searchKeywords = info.keywords || [ticker.toLowerCase()];
+    const infoValue = kTickerInfo[ticker];
+    if (infoValue) {
+        if (typeof infoValue === 'string') {
+            try {
+                const info = JSON.parse(infoValue);
+                searchKeywords = info.keywords || [ticker.toLowerCase()];
+            } catch (e) {
+                console.error(`[DETAILS DEBUG] Failed to parse kTickerInfo for ${ticker}. Value:`, infoValue);
+            }
+        } else if (typeof infoValue === 'object' && infoValue.keywords) {
+            searchKeywords = infoValue.keywords;
+        }
     }
     const relevantArticles = allFoundArticles.filter(a => searchKeywords.some(kw => a.title.toLowerCase().includes(kw)));
     
