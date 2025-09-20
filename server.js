@@ -139,14 +139,14 @@ app.get('/api/details', async (req, res) => {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
     
-    // ✨ FIX: 회사 이름 대신 테마 쿼리를 임베딩하여 뉴스 검색의 일관성 확보
+    // ✨ FIX: 회사 이름 대신 테마 쿼리를 임베딩하여 뉴스 검색의 일관성을 확보합니다.
     const { kInvestmentThemes } = require('./constants');
     const themeQuery = kInvestmentThemes[theme]?.query || ticker; // 해당 테마의 쿼리를 가져옴
     const embeddingResult = await embeddingModel.embedContent({ content: { parts: [{ text: themeQuery }] }, taskType: "RETRIEVAL_QUERY" });
     const queryVector = embeddingResult.embedding.values;
     
     const queryResult = await index.query({ 
-        topK: 500, // run_analysis.js와 동일하게 검색 기사 수를 늘림
+        topK: 500, // run_analysis.js와 동일하게 검색 범위를 설정합니다.
         vector: queryVector, 
         includeMetadata: true,
         filter: { "theme": { "$eq": theme } } // ✨ FIX: Pinecone 쿼리에 테마 필터 추가
@@ -159,7 +159,7 @@ app.get('/api/details', async (req, res) => {
     const smaLong = calculateSMA(quotes, 20);
     const rsi14 = calculateRSI(quotes, 14);
     
-    // ✨ FIX: kTickerInfo에서 키워드를 안전하게 파싱하여 사용
+    // ✨ FIX: kTickerInfo에서 키워드를 안전하게 파싱하여 사용합니다.
     let searchKeywords = [ticker.toLowerCase()];
     const infoValue = kTickerInfo[ticker];
     if (infoValue) {
