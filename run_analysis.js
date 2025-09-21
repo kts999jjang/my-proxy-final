@@ -433,8 +433,7 @@ async function main() {
             const queryResult = await index.query({ 
                 topK: 500, 
                 vector: queryVector, 
-                includeMetadata: true, // ✨ FIX: 날짜 필터를 제거하고 테마 필터만 남김
-                filter: { "theme": { "$eq": themeName } },
+                includeMetadata: true, // ✨ FIX: theme 필터를 제거하여 검색 안정성 확보
             });
 
             const allFoundArticles = queryResult.matches.map(match => match.metadata);
