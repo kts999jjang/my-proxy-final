@@ -335,7 +335,22 @@ async function populateNewsForThemes(themes, pinecone, genAI, daysToFetch) { // 
             const from = new Date();
             from.setDate(from.getDate() - daysToFetch); // 전달받은 기간 사용
             const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&lang=en&max=100&from=${from.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
-            const response = await fetch(gnewsUrl);
+            
+            // ✨ FIX: 각 테마별 뉴스 수집 시에도 재시도 로직 추가
+            let response;
+            let attempts = 0;
+            const maxAttempts = 3;
+            while (attempts < maxAttempts) {
+                try {
+                    response = await fetch(gnewsUrl, { timeout: 15000 }); // 15초 타임아웃
+                    if (response.ok) break;
+                } catch (e) {
+                    console.warn(`  - '${themeName}' 뉴스 수집 실패 (시도 ${attempts + 1}/${maxAttempts})...`);
+                }
+                attempts++;
+                await sleep(2000); // 2초 후 재시도
+            }
+
             const data = await response.json();
             if (data.articles) {
                 const articlesWithTheme = data.articles.map(article => ({ ...article, theme: themeName }));
