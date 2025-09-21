@@ -416,9 +416,13 @@ async function main() {
 
                 // ✨ FIX: 상세 페이지에서 사용할 수 있도록, 추천 근거가 된 뉴스 기사 목록을 찾습니다.
                 let relevantArticlesForStock = [];
-                if (existingInfo && existingInfo.keywords) {
+                if (existingInfo) {
+                    // ✨ FIX: keywords가 비어있으면 회사 이름을 기본 키워드로 사용
+                    const searchKeywords = (existingInfo.keywords && existingInfo.keywords.length > 0) 
+                        ? existingInfo.keywords 
+                        : [existingInfo.name.toLowerCase()];
                     relevantArticlesForStock = allFoundArticles.filter(a => 
-                        existingInfo.keywords.some(kw => a.title.toLowerCase().includes(kw))
+                        searchKeywords.some(kw => a.title.toLowerCase().includes(kw))
                     );
                 }
 
