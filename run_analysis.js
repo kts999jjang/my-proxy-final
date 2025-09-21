@@ -266,9 +266,25 @@ async function generateDynamicThemes(genAI) {
         // 1. 트렌드 파악을 위한 일반 뉴스 수집
         const trendQuery = '"market trend" OR "investment opportunity" OR "technology breakthrough" OR "industry analysis"';
         const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(trendQuery)}&topic=business,technology&lang=en&max=50&apikey=${process.env.GNEWS_API_KEY}`;
-        const response = await fetch(gnewsUrl);
+        
+        // ✨ FIX: 타임아웃 오류에 대비한 재시도 로직 추가
+        let response;
+        let attempts = 0;
+        const maxAttempts = 3;
+        while (attempts < maxAttempts) {
+            try {
+                response = await fetch(gnewsUrl, { timeout: 15000 }); // 15초 타임아웃 설정
+                if (response.ok) break;
+            } catch (e) {
+                console.warn(`  - GNews 트렌드 뉴스 수집 실패 (시도 ${attempts + 1}/${maxAttempts})...`);
+                if (attempts + 1 === maxAttempts) throw e; // 마지막 시도에서도 실패하면 오류를 던짐
+            }
+            attempts++;
+            await sleep(2000); // 2초 후 재시도
+        }
+
         const data = await response.json();
-        const articleTitles = data.articles.map(a => a.title).join('\n');
+        const articleTitles = data.articles?.map(a => a.title).join('\n') || '';
 
         // 2. Gemini에 테마 및 쿼리 생성 요청
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
