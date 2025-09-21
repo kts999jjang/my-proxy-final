@@ -427,7 +427,7 @@ async function main() {
                 scoredStocks.push({ 
                     ticker, 
                     score: compositeScore, 
-                    companyName: existingInfo?.name || ticker,
+                    companyName: existingInfo?.name || ticker, // ✨ FIX: hypeScore와 valueScore를 reason 객체 안으로 이동
                     reason: {
                         newsScore,
                         insiderScore: betaScore, // '내부자' 항목을 '베타' 점수로 대체
@@ -436,10 +436,10 @@ async function main() {
                         financialsScore,
                         sentimentScore,
                         potentialScore, // '상승 잠재력' 점수 추가
+                        hypeScore,
+                        valueScore,
                     },
-                    relevantArticles: relevantArticlesForStock.slice(0, 10),
-                    hypeScore,
-                    valueScore,
+                    relevantArticles: relevantArticlesForStock.slice(0, 10)
                 });
             }
 
