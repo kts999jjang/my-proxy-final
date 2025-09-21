@@ -4,7 +4,7 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const nlp = require('compromise');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { kInvestmentThemes } = require('./constants');
+const { kInvestmentThemes } = require('./constants'); // kTickerInfo import 제거
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -418,8 +418,8 @@ async function main() {
                 let relevantArticlesForStock = [];
                 if (existingInfo) {
                     // ✨ FIX: keywords가 비어있으면 회사 이름을 기본 키워드로 사용
-                    const searchKeywords = (existingInfo.keywords && existingInfo.keywords.length > 0) 
-                        ? existingInfo.keywords 
+                    const searchKeywords = (existingInfo.keywords && existingInfo.keywords.length > 0)
+                        ? existingInfo.keywords
                         : [existingInfo.name.toLowerCase()];
                     relevantArticlesForStock = allFoundArticles.filter(a => 
                         searchKeywords.some(kw => a.title.toLowerCase().includes(kw))
