@@ -3,18 +3,12 @@ const fetch = require('node-fetch');
 const { Pinecone } = require('@pinecone-database/pinecone');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { Redis } = require('@upstash/redis');
+const { kInvestmentThemes } = require('./constants');
 
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
 const BATCH_SIZE = 100;
 const DAYS_TO_FETCH = 30; // ✨ 유료 플랜을 활용하여 데이터 수집 기간을 30일로 확대
-
-const kInvestmentThemes = {
-  '인공지능(AI)': { query: '"artificial intelligence" OR "semiconductor" OR "machine learning" OR "NVIDIA"', },
-  '메타버스 & VR': { query: '"metaverse" OR "virtual reality" OR "augmented reality" OR "Roblox" OR "Unity"', },
-  '전기차 & 자율주행': { query: '"electric vehicle" OR "self-driving" OR "autonomous car" OR "Tesla" OR "Rivian"', },
-  '클라우드 컴퓨팅': { query: '"cloud computing" OR "data center" OR "SaaS" OR "Amazon AWS" OR "Microsoft Azure"', }
-};
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 

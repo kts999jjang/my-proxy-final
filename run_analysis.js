@@ -322,19 +322,18 @@ Provide the output ONLY in JSON format like this:
  * @param {Pinecone} pinecone - Pinecone 클라이언트 인스턴스
  * @param {GoogleGenerativeAI} genAI - GoogleGenerativeAI 인스턴스
  */
-async function populateNewsForThemes(themes, pinecone, genAI) {
+async function populateNewsForThemes(themes, pinecone, genAI, daysToFetch) { // daysToFetch 인자 추가
     console.log("📰 동적 테마 기반으로 뉴스 수집 및 Pinecone 저장을 시작합니다...");
     const index = pinecone.index('gcp-starter-gemini');
     const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
     const BATCH_SIZE = 100;
-    const DAYS_TO_FETCH = 14; // 분석에 사용할 데이터 기간
 
     let allArticles = [];
 
     for (const [themeName, themeData] of Object.entries(themes)) {
         try {
             const from = new Date();
-            from.setDate(from.getDate() - DAYS_TO_FETCH);
+            from.setDate(from.getDate() - daysToFetch); // 전달받은 기간 사용
             const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&lang=en&max=100&from=${from.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
             const response = await fetch(gnewsUrl);
             const data = await response.json();
@@ -380,6 +379,16 @@ async function populateNewsForThemes(themes, pinecone, genAI) {
 
 // --- 메인 실행 함수 ---
 async function main() {
+    // ✨ FIX: 커맨드 라인 인자에서 분석 기간을 파싱합니다.
+    const args = process.argv.slice(2);
+    const periodArg = args.find(arg => arg.startsWith('--period='));
+    const periodString = periodArg ? periodArg.split('=')[1] : '14d'; // 기본값 14일
+    
+    const periodMap = { '7d': 7, '14d': 14, '30d': 30, '90d': 90, '180d': 180, '365d': 365 };
+    const daysToAnalyze = periodMap[periodString] || 14;
+    const redisKey = `recommendations_${periodString}`; // 기간별 Redis 키 생성
+    console.log(`분석 기간: ${daysToAnalyze}일, Redis 저장 키: ${redisKey}`);
+
     const pinecone = new Pinecone();
     const index = pinecone.index('gcp-starter-gemini');
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -395,7 +404,7 @@ async function main() {
     const kInvestmentThemes = await generateDynamicThemes(genAI);
 
     // ✨ FIX: 생성된 동적 테마를 기반으로 뉴스를 수집하고 Pinecone에 저장
-    await populateNewsForThemes(kInvestmentThemes, pinecone, genAI);
+    await populateNewsForThemes(kInvestmentThemes, pinecone, genAI, daysToAnalyze); // daysToAnalyze 전달
 
     // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
     const kTickerInfo = await redis.hgetall('stock-info') || {};
@@ -616,7 +625,7 @@ async function main() {
             .join('\n');
         const successMessage = `✅ 분석 완료! 총 ${Object.keys(finalResults).length}개 테마의 추천 종목을 Redis에 저장했습니다.\n\n${summary}`;
         console.log(successMessage);
-        await redis.set('latest_recommendations', JSON.stringify({ results: finalResults }));
+        await redis.set(redisKey, JSON.stringify({ results: finalResults, analyzedAt: new Date().toISOString() })); // 기간별 키로 저장
         await sendSlackNotification(successMessage, 'good');
     } else {
         const warningMessage = "⚠️ 분석된 유효한 추천 종목이 없어 Redis에 데이터를 저장하지 않았습니다.";

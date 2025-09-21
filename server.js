@@ -100,18 +100,19 @@ function calculateRSI(data, period = 14) {
 
 // '/api/themes' 경로: Redis에서 미리 분석된 종목 목록을 반환
 app.get('/api/themes', async (req, res) => {
-  console.log("Received request for /api/themes");
+  // ✨ FIX: 사용자가 선택한 기간(period)을 쿼리 파라미터로 받습니다.
+  const period = req.query.period || '7d'; // 기본값 7일
+  const redisKey = `recommendations_${period}`;
+  console.log(`Received request for /api/themes with period: ${period} (Redis Key: ${redisKey})`);
+
   try {
-    const redis = new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN,
-    });
-    const cachedData = await redis.get('latest_recommendations');
+    const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+    const cachedData = await redis.get(redisKey);
     if (!cachedData) {
-      return res.status(404).json({ error: 'Analyzed data not found. Please run the analysis script.' });
+      // 해당 기간의 분석 데이터가 아직 준비되지 않았을 수 있습니다.
+      return res.status(404).json({ error: `선택하신 기간(${period})의 분석 데이터가 아직 준비되지 않았습니다.` });
     }
-    
-    return res.status(200).json(cachedData);
+    return res.status(200).json(JSON.parse(cachedData));
     
   } catch (error) {
     console.error('Themes API Error:', error);
