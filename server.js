@@ -112,7 +112,7 @@ app.get('/api/themes', async (req, res) => {
       // 해당 기간의 분석 데이터가 아직 준비되지 않았을 수 있습니다.
       return res.status(404).json({ error: `선택하신 기간(${period})의 분석 데이터가 아직 준비되지 않았습니다.` });
     }
-    return res.status(200).json(JSON.parse(cachedData));
+    return res.status(200).json(JSON.parse(cachedData)); // 이 부분은 이미 올바르게 되어있으므로, 앱 로직을 수정합니다.
     
   } catch (error) {
     console.error('Themes API Error:', error);
@@ -129,16 +129,19 @@ app.get('/dashboard', (req, res) => {
 app.get('/api/details', async (req, res) => {
   console.log(`Received request for /api/details with ticker: ${req.query.ticker}`);
   try {
-    const { ticker, theme } = req.query;
+    const { ticker, theme, period } = req.query; // ✨ FIX: period 파라미터 추가
     if (!ticker) { return res.status(400).json({ error: 'Ticker is required' }); }
 
     const stockData = await fetchStockDataFromYahoo(ticker);
     if (!stockData) { return res.status(404).json({ error: 'Stock data not found' }); }
 
     // ✨ FIX: 실시간 분석 대신 Redis에 저장된 분석 결과를 사용합니다.
+    const redisPeriod = period || '7d'; // period가 없으면 기본값 사용
+    const redisKey = `recommendations_${redisPeriod}`;
     const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
-    const recommendationsData = await redis.get('latest_recommendations');
-    if (!recommendationsData) return res.status(404).json({ error: 'Recommendation data not found in cache.' });
+    const recommendationsDataString = await redis.get(redisKey);
+    if (!recommendationsDataString) return res.status(404).json({ error: `Recommendation data not found for period ${redisPeriod}` });
+    const recommendationsData = JSON.parse(recommendationsDataString);
 
     const recommendations = recommendationsData.results[theme];
     const allRecommendedStocks = [...(recommendations?.leading || []), ...(recommendations?.growth || [])];
