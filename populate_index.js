@@ -7,7 +7,7 @@ const { Redis } = require('@upstash/redis');
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
 const BATCH_SIZE = 100;
-const DAYS_TO_FETCH = 7; // ✨ 데이터를 수집할 기간 (일)
+const DAYS_TO_FETCH = 30; // ✨ 유료 플랜을 활용하여 데이터 수집 기간을 30일로 확대
 
 const kInvestmentThemes = {
   '인공지능(AI)': { query: '"artificial intelligence" OR "semiconductor" OR "machine learning" OR "NVIDIA"', },

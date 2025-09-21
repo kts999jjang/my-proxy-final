@@ -4,7 +4,6 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const nlp = require('compromise');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { kInvestmentThemes } = require('./constants'); // kTickerInfo import 제거
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -256,6 +255,51 @@ async function sendSlackNotification(message, color = 'good') {
     }
 }
 
+/**
+ * Gemini AI를 사용하여 최신 뉴스 기반으로 동적 투자 테마와 쿼리를 생성합니다.
+ * @param {GoogleGenerativeAI} genAI - GoogleGenerativeAI 인스턴스
+ * @returns {Promise<Object>} 동적으로 생성된 투자 테마 객체
+ */
+async function generateDynamicThemes(genAI) {
+    console.log("🤖 AI를 사용하여 최신 투자 테마를 동적으로 생성합니다...");
+    try {
+        // 1. 트렌드 파악을 위한 일반 뉴스 수집
+        const trendQuery = '"market trend" OR "investment opportunity" OR "technology breakthrough" OR "industry analysis"';
+        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(trendQuery)}&topic=business,technology&lang=en&max=50&apikey=${process.env.GNEWS_API_KEY}`;
+        const response = await fetch(gnewsUrl);
+        const data = await response.json();
+        const articleTitles = data.articles.map(a => a.title).join('\n');
+
+        // 2. Gemini에 테마 및 쿼리 생성 요청
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const prompt = `Based on the following recent news headlines, identify the top 5 most promising investment themes. For each theme, provide a concise theme name in Korean and a GNews search query. The query must be in English and structured like '("core technology" OR "synonym") AND (CompanyName OR "Another Company")'.
+
+News Headlines:
+${articleTitles}
+
+Provide the output ONLY in JSON format like this:
+{
+  "테마 이름 1": { "query": "GNews query for theme 1" },
+  "테마 이름 2": { "query": "GNews query for theme 2" }
+}`;
+
+        const result = await model.generateContent(prompt);
+        const jsonString = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
+        const dynamicThemes = JSON.parse(jsonString);
+
+        console.log("✅ 동적 테마 생성 완료:", Object.keys(dynamicThemes).join(', '));
+        return dynamicThemes;
+
+    } catch (error) {
+        console.error("동적 테마 생성 중 오류 발생. 기본 테마를 사용합니다.", error);
+        // 오류 발생 시 사용할 기본(fallback) 테마
+        return {
+            '인공지능(AI)': { query: '"artificial intelligence" AND (NVIDIA OR Google)' },
+            '전기차 & 배터리': { query: '"electric vehicle" AND (Tesla OR "LG Energy Solution")' },
+        };
+    }
+}
+
 // --- 메인 실행 함수 ---
 async function main() {
     const pinecone = new Pinecone();
@@ -268,6 +312,9 @@ async function main() {
     });
 
     await sendSlackNotification("📈 주식 분석 스크립트를 시작합니다...", '#439FE0');
+
+    // ✨ FIX: AI를 사용하여 동적으로 투자 테마를 생성
+    const kInvestmentThemes = await generateDynamicThemes(genAI);
 
     // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
     const kTickerInfo = await redis.hgetall('stock-info') || {};
