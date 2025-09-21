@@ -316,6 +316,68 @@ Provide the output ONLY in JSON format like this:
     }
 }
 
+/**
+ * ✨ FIX: 동적으로 생성된 테마를 기반으로 GNews에서 기사를 수집하고 Pinecone에 저장합니다.
+ * @param {object} themes - 동적으로 생성된 투자 테마 객체
+ * @param {Pinecone} pinecone - Pinecone 클라이언트 인스턴스
+ * @param {GoogleGenerativeAI} genAI - GoogleGenerativeAI 인스턴스
+ */
+async function populateNewsForThemes(themes, pinecone, genAI) {
+    console.log("📰 동적 테마 기반으로 뉴스 수집 및 Pinecone 저장을 시작합니다...");
+    const index = pinecone.index('gcp-starter-gemini');
+    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+    const BATCH_SIZE = 100;
+    const DAYS_TO_FETCH = 14; // 분석에 사용할 데이터 기간
+
+    let allArticles = [];
+
+    for (const [themeName, themeData] of Object.entries(themes)) {
+        try {
+            const from = new Date();
+            from.setDate(from.getDate() - DAYS_TO_FETCH);
+            const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&lang=en&max=100&from=${from.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
+            const response = await fetch(gnewsUrl);
+            const data = await response.json();
+            if (data.articles) {
+                const articlesWithTheme = data.articles.map(article => ({ ...article, theme: themeName }));
+                allArticles.push(...articlesWithTheme);
+                console.log(`  - '${themeName}' 테마 기사 ${data.articles.length}개 수집 완료.`);
+            }
+        } catch (e) {
+            console.error(`'${themeName}' 테마 기사 수집 중 오류 발생:`, e);
+        }
+    }
+
+    const uniqueArticles = Array.from(new Map(allArticles.map(article => [article.url, article])).values());
+    console.log(`\n총 ${uniqueArticles.length}개의 고유한 기사가 수집되었습니다. Pinecone에 저장합니다...`);
+
+    let vectors = [];
+    for (const article of uniqueArticles) {
+        try {
+            const embeddingResult = await embeddingModel.embedContent(article.title);
+            vectors.push({
+                id: article.url,
+                values: embeddingResult.embedding.values,
+                metadata: {
+                    title: article.title,
+                    source: article.source.name,
+                    url: article.url,
+                    publishedAt: Math.floor(new Date(article.publishedAt).getTime() / 1000),
+                    theme: article.theme,
+                },
+            });
+        } catch (e) {
+            console.error(`'${article.title}' 임베딩 변환 중 오류:`, e.message);
+        }
+    }
+
+    for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
+        const batch = vectors.slice(i, i + BATCH_SIZE);
+        await index.upsert(batch);
+    }
+    console.log("✅ Pinecone에 최신 뉴스 데이터 저장 완료!");
+}
+
 // --- 메인 실행 함수 ---
 async function main() {
     const pinecone = new Pinecone();
@@ -331,6 +393,9 @@ async function main() {
 
     // ✨ FIX: AI를 사용하여 동적으로 투자 테마를 생성
     const kInvestmentThemes = await generateDynamicThemes(genAI);
+
+    // ✨ FIX: 생성된 동적 테마를 기반으로 뉴스를 수집하고 Pinecone에 저장
+    await populateNewsForThemes(kInvestmentThemes, pinecone, genAI);
 
     // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
     const kTickerInfo = await redis.hgetall('stock-info') || {};
