@@ -25,8 +25,9 @@ async function main() {
   });
 
   // ✨ FIX: 스크립트 시작 시 Pinecone 인덱스의 현재 벡터 수를 확인
-  const stats = await index.describeIndexStats();
-  const totalVectors = stats.totalVectorCount || 0;
+  // ✨ FIX: describeIndexStats()의 응답 구조가 변경될 수 있으므로, 더 안전하게 값을 확인합니다.
+  const stats = await index.describeIndexStats() || {};
+  const totalVectors = stats.totalVectorCount ?? 0;
   const dateRange = await redis.get('news_date_range');
   const { oldest, newest } = dateRange || { oldest: 'N/A', newest: 'N/A' };
 
@@ -51,14 +52,28 @@ async function main() {
     console.log(`\n[${i + 1}/${DAYS_TO_FETCH}] ${targetDate.toISOString().split('T')[0]} 날짜의 데이터를 수집합니다...`);
 
     try {
-        // ✨ FIX: "투자"와 직접 관련된 양질의 뉴스만 선별하여 수집하도록 쿼리를 수정합니다.
-        const query = '("stock market" OR "earnings report" OR investment OR "financial results" OR acquisition OR partnership) AND (technology OR finance OR business)';
-        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=100&from=${from.toISOString()}&to=${to.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
-        const response = await fetch(gnewsUrl);
+        // ✨ FIX: 특정 키워드 대신, 광범위한 주제의 뉴스를 수집하여 데이터 편향을 최소화합니다.
+        const gnewsUrl = `https://gnews.io/api/v4/top-headlines?topic=business,technology&lang=en&max=100&from=${from.toISOString()}&to=${to.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
+        
+        // ✨ FIX: GNews API 호출 시 타임아웃 및 재시도 로직을 추가하여 안정성을 높입니다.
+        let response;
+        let attempts = 0;
+        const maxAttempts = 3;
+        while (attempts < maxAttempts) {
+            try {
+                response = await fetch(gnewsUrl, { timeout: 30000 }); // 30초 타임아웃
+                if (response.ok) break;
+            } catch (e) {
+                console.warn(`  - GNews API 호출 실패 (시도 ${attempts + 1}/${maxAttempts})...`);
+            }
+            attempts++;
+            await sleep(2000); // 2초 후 재시도
+        }
+
         const data = await response.json();
         if (data.articles) {
             allArticles.push(...data.articles);
-            console.log(`  - 투자 관련 기사 ${data.articles.length}개 수집 완료.`);
+            console.log(`  - 비즈니스/기술 기사 ${data.articles.length}개 수집 완료.`);
         }
     } catch (e) {
         console.error(`뉴스 기사 수집 중 오류 발생:`, e);

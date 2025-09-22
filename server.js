@@ -202,7 +202,7 @@ app.get('/api/stats', async (req, res) => {
     try {
         const pinecone = new Pinecone();
         const index = pinecone.index('gcp-starter-gemini');
-        const pineconeStats = await index.describeIndexStats();
+        const pineconeStats = await index.describeIndexStats() || {};
 
         const redis = new Redis({
             url: process.env.UPSTASH_REDIS_REST_URL,
@@ -212,7 +212,7 @@ app.get('/api/stats', async (req, res) => {
         const redisStockCount = await redis.hlen('stock-info');
 
         res.json({
-            pineconeVectors: pineconeStats.totalVectorCount || 0,
+            pineconeVectors: pineconeStats.totalVectorCount ?? 0,
             newsDateRange,
             redisStockCount,
         });
