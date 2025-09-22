@@ -646,11 +646,11 @@ async function main() {
             .join('\n');
         const successMessage = `✅ 분석 완료! 총 ${Object.keys(finalResults).length}개 테마의 추천 종목을 Redis에 저장했습니다.\n\n${summary}`;
         console.log(successMessage);
-        await redis.set(redisKey, JSON.stringify({ results: finalResults, analyzedAt: new Date().toISOString() }));
+        await redis.set(redisKey, JSON.stringify({ results: finalResults, analyzedAt: new Date().toISOString() })); // ✨ FIX: 객체를 JSON 문자열로 변환하여 저장
         await sendSlackNotification(successMessage, 'good');
     } else {
         const warningMessage = "⚠️ 분석된 유효한 추천 종목이 없어 Redis에 데이터를 저장하지 않았습니다.";
-        console.warn(warningMessage);
+        console.warn(warningMessage);ㄴ
         await sendSlackNotification(warningMessage, 'warning');
     }
 }

@@ -112,6 +112,10 @@ app.get('/api/themes', async (req, res) => {
       // 해당 기간의 분석 데이터가 아직 준비되지 않았을 수 있습니다.
       return res.status(404).json({ error: `선택하신 기간(${period})의 분석 데이터가 아직 준비되지 않았습니다.` });
     }
+    // ✨ DEBUG: Redis에서 가져온 데이터의 실제 내용과 타입을 확인합니다.
+    console.log(`[DEBUG] Type of cachedData for ${redisKey}: ${typeof cachedData}`);
+    console.log(`[DEBUG] Value of cachedData for ${redisKey}:`, cachedData);
+
     // ✨ FIX: 앱이 예상하는 'results' 객체만 추출하여 반환합니다.
     const parsedData = JSON.parse(cachedData);
     return res.status(200).json(parsedData.results || {});
