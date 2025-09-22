@@ -497,16 +497,23 @@ async function main() {
             
             console.log(`  - 상위 ${candidatesForAnalysis.length}개 후보 종목에 대한 심층 분석을 시작합니다...`);
 
-            // STEP 5: 내부자/애널리스트 점수만 병렬로 조회
-            const tickersToAnalyze = candidatesForAnalysis.map(c => c.ticker);
-            const analysisPromises = tickersToAnalyze.map(ticker => Promise.all([
-                getBasicFinancials(ticker), // ✨ FIX: 시총, 베타 등 핵심 지표를 한 번에 가져옴
-                getAnalystRatingScore(ticker),
-                getEarningsSurpriseScore(ticker),
-                getFinancialsScore(ticker),
-                getCurrentPriceFromYahoo(ticker) // ✨ FIX: Yahoo Finance에서 현재가 조회
-            ]));
-            const analysisResults = await Promise.all(analysisPromises);
+            // ✨ FIX: API 호출 제한을 피하기 위해 작업을 작은 묶음(chunk)으로 나누어 처리
+            const CHUNK_SIZE = 5;
+            let analysisResults = [];
+            for (let i = 0; i < candidatesForAnalysis.length; i += CHUNK_SIZE) {
+                const chunk = candidatesForAnalysis.slice(i, i + CHUNK_SIZE);
+                console.log(`    - API 호출 묶음 처리 중 (${i + 1} - ${i + chunk.length})...`);
+                const chunkPromises = chunk.map(c => Promise.all([
+                    getBasicFinancials(c.ticker),
+                    getAnalystRatingScore(c.ticker),
+                    getEarningsSurpriseScore(c.ticker),
+                    getFinancialsScore(c.ticker),
+                    getCurrentPriceFromYahoo(c.ticker)
+                ]));
+                const chunkResults = await Promise.all(chunkPromises);
+                analysisResults.push(...chunkResults);
+                await sleep(1000); // 각 묶음 처리 후 잠시 대기
+            }
 
             // STEP 6: 최종 점수 계산 및 추천 목록 생성
             const scoredStocks = [];
