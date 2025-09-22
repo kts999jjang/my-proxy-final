@@ -273,10 +273,12 @@ async function generateDynamicThemes(genAI) {
         const maxAttempts = 3;
         while (attempts < maxAttempts) {
             try {
-                response = await fetch(gnewsUrl, { timeout: 15000 }); // 15초 타임아웃 설정
+                // ✨ FIX: GNews API의 응답 시간을 고려하여 타임아웃을 30초로 늘립니다.
+                response = await fetch(gnewsUrl, { timeout: 30000 }); // 30초 타임아웃 설정
                 if (response.ok) break;
             } catch (e) {
-                console.warn(`  - GNews 트렌드 뉴스 수집 실패 (시도 ${attempts + 1}/${maxAttempts})...`);
+                // ✨ FIX: 오류 발생 시 더 상세한 정보를 로그로 남깁니다.
+                console.warn(`  - GNews 트렌드 뉴스 수집 실패 (시도 ${attempts + 1}/${maxAttempts}). 이유: ${e.message}`);
                 if (attempts + 1 === maxAttempts) throw e; // 마지막 시도에서도 실패하면 오류를 던짐
             }
             attempts++;
