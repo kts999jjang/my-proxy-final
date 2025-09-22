@@ -117,8 +117,7 @@ app.get('/api/themes', async (req, res) => {
     console.log(`[DEBUG] Value of cachedData for ${redisKey}:`, cachedData);
 
     // ✨ FIX: 앱이 예상하는 'results' 객체만 추출하여 반환합니다.
-    const parsedData = JSON.parse(cachedData);
-    return res.status(200).json(parsedData.results || {});
+    return res.status(200).json(cachedData.results || {});
     
   } catch (error) {
     console.error('Themes API Error:', error);
