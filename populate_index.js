@@ -8,7 +8,7 @@ const { kInvestmentThemes } = require('./constants');
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
 const BATCH_SIZE = 100;
-const DAYS_TO_FETCH = 30; // ✨ 유료 플랜을 활용하여 데이터 수집 기간을 30일로 확대
+const DAYS_TO_FETCH = 1; // ✨ 매일 실행되므로, 최근 하루치 데이터만 수집하여 누적합니다.
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 

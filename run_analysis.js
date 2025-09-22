@@ -310,88 +310,15 @@ Provide the output ONLY in JSON format like this:
 
     } catch (error) {
         console.error("동적 테마 생성 중 오류 발생. 기본 테마를 사용합니다.", error);
-        // 오류 발생 시 사용할 기본(fallback) 테마
+        // ✨ FIX: GNews API 실패 시에도 유의미한 분석이 가능하도록 기본 테마를 더 정교하게 구성합니다.
         return {
-            '인공지능(AI)': { query: '"artificial intelligence" AND (NVIDIA OR Google)' },
-            '전기차 & 배터리': { query: '"electric vehicle" AND (Tesla OR "LG Energy Solution")' },
+            '소비재 투자': { query: '("consumer spending" OR "retail sales") AND (Walmart OR Amazon OR Target)' },
+            '금 시장 투자': { query: '("gold price" OR "gold market") AND ("Barrick Gold" OR Newmont)' },
+            '부동산 투자': { query: '("real estate" OR "housing market" OR "REITs") AND (Prologis OR "Simon Property Group")' },
+            '신규 공개 (IPO) 투자': { query: '("initial public offering" OR "IPO") AND (stock OR market)' },
+            '에너지 투자': { query: '("oil price" OR "energy sector") AND (Exxon OR Chevron)' },
         };
     }
-}
-
-/**
- * ✨ FIX: 동적으로 생성된 테마를 기반으로 GNews에서 기사를 수집하고 Pinecone에 저장합니다.
- * @param {object} themes - 동적으로 생성된 투자 테마 객체
- * @param {Pinecone} pinecone - Pinecone 클라이언트 인스턴스
- * @param {GoogleGenerativeAI} genAI - GoogleGenerativeAI 인스턴스
- */
-async function populateNewsForThemes(themes, pinecone, genAI, daysToFetch) { // daysToFetch 인자 추가
-    console.log("📰 동적 테마 기반으로 뉴스 수집 및 Pinecone 저장을 시작합니다...");
-    const index = pinecone.index('gcp-starter-gemini');
-    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-    const BATCH_SIZE = 100;
-
-    let allArticles = [];
-
-    for (const [themeName, themeData] of Object.entries(themes)) {
-        try {
-            const from = new Date();
-            from.setDate(from.getDate() - daysToFetch); // 전달받은 기간 사용
-            const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&lang=en&max=100&from=${from.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
-            
-            // ✨ FIX: 각 테마별 뉴스 수집 시에도 재시도 로직 추가
-            let response;
-            let attempts = 0;
-            const maxAttempts = 3;
-            while (attempts < maxAttempts) {
-                try {
-                    response = await fetch(gnewsUrl, { timeout: 15000 }); // 15초 타임아웃
-                    if (response.ok) break;
-                } catch (e) {
-                    console.warn(`  - '${themeName}' 뉴스 수집 실패 (시도 ${attempts + 1}/${maxAttempts})...`);
-                }
-                attempts++;
-                await sleep(2000); // 2초 후 재시도
-            }
-
-            const data = await response.json();
-            if (data.articles) {
-                const articlesWithTheme = data.articles.map(article => ({ ...article, theme: themeName }));
-                allArticles.push(...articlesWithTheme);
-                console.log(`  - '${themeName}' 테마 기사 ${data.articles.length}개 수집 완료.`);
-            }
-        } catch (e) {
-            console.error(`'${themeName}' 테마 기사 수집 중 오류 발생:`, e);
-        }
-    }
-
-    const uniqueArticles = Array.from(new Map(allArticles.map(article => [article.url, article])).values());
-    console.log(`\n총 ${uniqueArticles.length}개의 고유한 기사가 수집되었습니다. Pinecone에 저장합니다...`);
-
-    let vectors = [];
-    for (const article of uniqueArticles) {
-        try {
-            const embeddingResult = await embeddingModel.embedContent(article.title);
-            vectors.push({
-                id: article.url,
-                values: embeddingResult.embedding.values,
-                metadata: {
-                    title: article.title,
-                    source: article.source.name,
-                    url: article.url,
-                    publishedAt: Math.floor(new Date(article.publishedAt).getTime() / 1000),
-                    theme: article.theme,
-                },
-            });
-        } catch (e) {
-            console.error(`'${article.title}' 임베딩 변환 중 오류:`, e.message);
-        }
-    }
-
-    for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
-        const batch = vectors.slice(i, i + BATCH_SIZE);
-        await index.upsert(batch);
-    }
-    console.log("✅ Pinecone에 최신 뉴스 데이터 저장 완료!");
 }
 
 // --- 메인 실행 함수 ---
@@ -420,9 +347,6 @@ async function main() {
     // ✨ FIX: AI를 사용하여 동적으로 투자 테마를 생성
     const kInvestmentThemes = await generateDynamicThemes(genAI);
 
-    // ✨ FIX: 생성된 동적 테마를 기반으로 뉴스를 수집하고 Pinecone에 저장
-    await populateNewsForThemes(kInvestmentThemes, pinecone, genAI, daysToAnalyze); // daysToAnalyze 전달
-
     // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
     const kTickerInfo = await redis.hgetall('stock-info') || {};
     console.log(`${Object.keys(kTickerInfo).length}개의 주식 정보를 Redis에서 로드했습니다.`);
@@ -446,11 +370,18 @@ async function main() {
             });
             const queryVector = embeddingResult.embedding.values;
 
+            // ✨ FIX: Pinecone 쿼리에 날짜 필터를 추가합니다.
+            const now = new Date();
+            const startDate = new Date(now.setDate(now.getDate() - daysToAnalyze));
+            const startTimestamp = Math.floor(startDate.getTime() / 1000);
+
             // 분석할 기사 수를 500개로 늘림
             const queryResult = await index.query({ 
                 topK: 500, 
                 vector: queryVector, 
-                includeMetadata: true, // ✨ FIX: theme 필터를 제거하여 검색 안정성 확보
+                includeMetadata: true,
+                // 'publishedAt' 메타데이터가 시작 타임스탬프보다 크거나 같은 기사만 검색
+                filter: { "publishedAt": { "$gte": startTimestamp } },
             });
 
             const allFoundArticles = queryResult.matches.map(match => match.metadata);
