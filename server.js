@@ -136,12 +136,12 @@ app.get('/api/details', async (req, res) => {
     if (!stockData) { return res.status(404).json({ error: 'Stock data not found' }); }
 
     // ✨ FIX: 실시간 분석 대신 Redis에 저장된 분석 결과를 사용합니다.
-    const redisPeriod = period || '7d'; // period가 없으면 기본값 사용
+    const redisPeriod = period || '7d'; // period가 없으면 기본값 7d 사용
     const redisKey = `recommendations_${redisPeriod}`;
     const redis = new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
-    const recommendationsDataString = await redis.get(redisKey);
+    const recommendationsDataString = await redis.get(redisKey); // 기간별 키로 조회
     if (!recommendationsDataString) return res.status(404).json({ error: `Recommendation data not found for period ${redisPeriod}` });
-    const recommendationsData = JSON.parse(recommendationsDataString);
+    const recommendationsData = JSON.parse(recommendationsDataString); // JSON 파싱
 
     const recommendations = recommendationsData.results[theme];
     const allRecommendedStocks = [...(recommendations?.leading || []), ...(recommendations?.growth || [])];
