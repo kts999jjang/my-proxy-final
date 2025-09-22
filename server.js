@@ -143,9 +143,12 @@ app.get('/api/details', async (req, res) => {
     if (!recommendationsDataString) return res.status(404).json({ error: `Recommendation data not found for period ${redisPeriod}` });
     const recommendationsData = JSON.parse(recommendationsDataString); // JSON 파싱
 
-    const recommendations = recommendationsData.results[theme];
+    // ✨ FIX: recommendationsData.results가 null일 경우를 대비하여 안정성 확보
+    const recommendations = recommendationsData?.results?.[theme];
     const allRecommendedStocks = [...(recommendations?.leading || []), ...(recommendations?.growth || [])];
     const stockInfo = allRecommendedStocks.find(s => s.ticker === ticker);
+    
+    // ✨ FIX: stockInfo가 없을 경우에도 relevantArticles가 빈 배열이 되도록 수정
     const relevantArticles = stockInfo?.relevantArticles || [];
 
     const { timestamps, indicators } = stockData;
