@@ -112,7 +112,9 @@ app.get('/api/themes', async (req, res) => {
       // 해당 기간의 분석 데이터가 아직 준비되지 않았을 수 있습니다.
       return res.status(404).json({ error: `선택하신 기간(${period})의 분석 데이터가 아직 준비되지 않았습니다.` });
     }
-    return res.status(200).json(JSON.parse(cachedData)); // 이 부분은 이미 올바르게 되어있으므로, 앱 로직을 수정합니다.
+    // ✨ FIX: 앱이 예상하는 'results' 객체만 추출하여 반환합니다.
+    const parsedData = JSON.parse(cachedData);
+    return res.status(200).json(parsedData.results || {});
     
   } catch (error) {
     console.error('Themes API Error:', error);

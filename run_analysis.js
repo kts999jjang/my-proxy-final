@@ -497,22 +497,22 @@ async function main() {
             
             console.log(`  - 상위 ${candidatesForAnalysis.length}개 후보 종목에 대한 심층 분석을 시작합니다...`);
 
-            // ✨ FIX: API 호출 제한을 피하기 위해 작업을 작은 묶음(chunk)으로 나누어 처리
+            // ✨ FIX: API 호출 제한(Rate Limit)을 피하기 위해 작업을 작은 묶음(chunk)으로 나누어 처리합니다.
             const CHUNK_SIZE = 5;
             let analysisResults = [];
             for (let i = 0; i < candidatesForAnalysis.length; i += CHUNK_SIZE) {
                 const chunk = candidatesForAnalysis.slice(i, i + CHUNK_SIZE);
                 console.log(`    - API 호출 묶음 처리 중 (${i + 1} - ${i + chunk.length})...`);
                 const chunkPromises = chunk.map(c => Promise.all([
-                    getBasicFinancials(c.ticker),
-                    getAnalystRatingScore(c.ticker),
-                    getEarningsSurpriseScore(c.ticker),
-                    getFinancialsScore(c.ticker),
-                    getCurrentPriceFromYahoo(c.ticker)
+                    getBasicFinancials(c.ticker),      // API call 1
+                    getAnalystRatingScore(c.ticker),   // API call 2
+                    getEarningsSurpriseScore(c.ticker),// API call 3
+                    getFinancialsScore(c.ticker),      // API call 4
+                    getCurrentPriceFromYahoo(c.ticker) // API call 5
                 ]));
                 const chunkResults = await Promise.all(chunkPromises);
                 analysisResults.push(...chunkResults);
-                await sleep(1000); // 각 묶음 처리 후 잠시 대기
+                await sleep(2000); // 각 묶음 처리 후 2초간 대기하여 API 서버 부담을 줄입니다.
             }
 
             // STEP 6: 최종 점수 계산 및 추천 목록 생성
