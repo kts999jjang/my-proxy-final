@@ -260,53 +260,53 @@ async function sendSlackNotification(message, color = 'good') {
  * @param {GoogleGenerativeAI} genAI - GoogleGenerativeAI 인스턴스
  * @returns {Promise<Object>} 동적으로 생성된 투자 테마 객체
  */
-async function generateDynamicThemes(genAI) {
+async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
     console.log("🤖 AI를 사용하여 최신 투자 테마를 동적으로 생성합니다...");
     try {
-        // 1. 트렌드 파악을 위한 일반 뉴스 수집
-        const trendQuery = '"market trend" OR "investment opportunity" OR "technology breakthrough" OR "industry analysis"';
-        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(trendQuery)}&topic=business,technology&lang=en&max=50&apikey=${process.env.GNEWS_API_KEY}`;
-        
-        // ✨ FIX: 타임아웃 오류에 대비한 재시도 로직 추가
-        let response;
-        let attempts = 0;
-        const maxAttempts = 3;
-        while (attempts < maxAttempts) {
-            try {
-                // ✨ FIX: GNews API의 응답 시간을 고려하여 타임아웃을 30초로 늘립니다.
-                response = await fetch(gnewsUrl, { timeout: 30000 }); // 30초 타임아웃 설정
-                if (response.ok) break;
-            } catch (e) {
-                // ✨ FIX: 오류 발생 시 더 상세한 정보를 로그로 남깁니다.
-                console.warn(`  - GNews 트렌드 뉴스 수집 실패 (시도 ${attempts + 1}/${maxAttempts}). 이유: ${e.message}`);
-                if (attempts + 1 === maxAttempts) throw e; // 마지막 시도에서도 실패하면 오류를 던짐
-            }
-            attempts++;
-            await sleep(2000); // 2초 후 재시도
-        }
+        // ✨ FIX: Pinecone에서 최신 뉴스 제목을 가져와 트렌드 분석에 사용합니다.
+        const index = pinecone.index('gcp-starter-gemini');
+        const now = new Date();
+        // ✨ FIX: 분석 기간에 맞춰 뉴스 샘플링 기간을 동적으로 설정합니다.
+        const startDate = new Date(now.setDate(now.getDate() - daysToAnalyze));
+        const startTimestamp = Math.floor(startDate.getTime() / 1000);
 
-        const data = await response.json();
-        const articleTitles = data.articles?.map(a => a.title).join('\n') || '';
+        // 임의의 벡터로 쿼리하여 최신 기사를 가져옵니다. (필터링이 핵심)
+        const queryResult = await index.query({
+            topK: 200, // 트렌드 분석을 위해 200개 기사 샘플링
+            vector: Array(1024).fill(0), // 의미 없는 벡터, 필터링이 목적
+            includeMetadata: true,
+            filter: { "publishedAt": { "$gte": startTimestamp } },
+        });
+
+        const articleTitles = queryResult.matches.map(match => match.metadata.title).join('\n');
+        if (!articleTitles) throw new Error("Pinecone에서 분석할 최신 뉴스를 찾지 못했습니다.");
 
         // 2. Gemini에 테마 및 쿼리 생성 요청
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const prompt = `Based on the following recent news headlines, identify the top 5 most promising investment themes. For each theme, provide a concise theme name in Korean and a GNews search query. The query must be in English and structured like '("core technology" OR "synonym") AND (CompanyName OR "Another Company")'.
+        const prompt = `Based on the following recent news headlines, provide two things in a single JSON object:
+1. A "summary" of the overall market trends from these headlines, written in Korean, within 2-3 sentences.
+2. A "themes" object containing the top 5 most promising investment themes. For each theme, provide a concise theme name in Korean and a GNews search query in English, structured like '("core technology" OR "synonym") AND (CompanyName OR "Another Company")'.
 
 News Headlines:
 ${articleTitles}
 
-Provide the output ONLY in JSON format like this:
+Provide the output ONLY in JSON format like this example:
 {
-  "테마 이름 1": { "query": "GNews query for theme 1" },
-  "테마 이름 2": { "query": "GNews query for theme 2" }
+  "summary": "최근 시장은 AI 기술의 발전과 금리 변동에 대한 우려가 공존하는 모습을 보이고 있습니다. 특히 반도체 분야의 경쟁이 심화되고 있습니다.",
+  "themes": {
+    "테마 이름 1": { "query": "GNews query for theme 1" },
+    "테마 이름 2": { "query": "GNews query for theme 2" }
+  }
 }`;
 
         const result = await model.generateContent(prompt);
         const jsonString = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-        const dynamicThemes = JSON.parse(jsonString);
+        const generatedData = JSON.parse(jsonString);
+        const dynamicThemes = generatedData.themes;
+        const marketSummary = generatedData.summary;
 
-        console.log("✅ 동적 테마 생성 완료:", Object.keys(dynamicThemes).join(', '));
-        return dynamicThemes;
+        console.log("✅ 동적 테마 및 요약 생성 완료:", Object.keys(dynamicThemes).join(', '));
+        return { themes: dynamicThemes, summary: marketSummary };
 
     } catch (error) {
         console.error("동적 테마 생성 중 오류 발생. 기본 테마를 사용합니다.", error);
@@ -314,9 +314,9 @@ Provide the output ONLY in JSON format like this:
         return {
             '소비재 투자': { query: '("consumer spending" OR "retail sales") AND (Walmart OR Amazon OR Target)' },
             '금 시장 투자': { query: '("gold price" OR "gold market") AND ("Barrick Gold" OR Newmont)' },
-            '부동산 투자': { query: '("real estate" OR "housing market" OR "REITs") AND (Prologis OR "Simon Property Group")' },
-            '신규 공개 (IPO) 투자': { query: '("initial public offering" OR "IPO") AND (stock OR market)' },
-            '에너지 투자': { query: '("oil price" OR "energy sector") AND (Exxon OR Chevron)' },
+            '부동산 투자': { query: '("real estate" OR "housing market") AND (Prologis OR "Simon Property Group")' },
+            '신규 공개(IPO) 투자': { query: '("initial public offering" OR "IPO") AND (stock OR market)' },
+            '에너지 투자': { query: '("oil price" OR "energy sector") AND (Exxon OR Chevron)' }
         };
     }
 }
@@ -345,7 +345,7 @@ async function main() {
     await sendSlackNotification("📈 주식 분석 스크립트를 시작합니다...", '#439FE0');
 
     // ✨ FIX: AI를 사용하여 동적으로 투자 테마를 생성
-    const kInvestmentThemes = await generateDynamicThemes(genAI);
+    const { themes: kInvestmentThemes, summary: marketSummary } = await generateDynamicThemes(genAI, pinecone, daysToAnalyze);
 
     // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
     const kTickerInfo = await redis.hgetall('stock-info') || {};
@@ -370,18 +370,11 @@ async function main() {
             });
             const queryVector = embeddingResult.embedding.values;
 
-            // ✨ FIX: Pinecone 쿼리에 날짜 필터를 추가합니다.
-            const now = new Date();
-            const startDate = new Date(now.setDate(now.getDate() - daysToAnalyze));
-            const startTimestamp = Math.floor(startDate.getTime() / 1000);
-
             // 분석할 기사 수를 500개로 늘림
             const queryResult = await index.query({ 
                 topK: 500, 
                 vector: queryVector, 
-                includeMetadata: true,
-                // 'publishedAt' 메타데이터가 시작 타임스탬프보다 크거나 같은 기사만 검색
-                filter: { "publishedAt": { "$gte": startTimestamp } },
+                includeMetadata: true, // ✨ FIX: 필터 제거. Pinecone에는 이미 필요한 데이터만 있음.
             });
 
             const allFoundArticles = queryResult.matches.map(match => match.metadata);
@@ -579,11 +572,11 @@ async function main() {
             .join('\n');
         const successMessage = `✅ 분석 완료! 총 ${Object.keys(finalResults).length}개 테마의 추천 종목을 Redis에 저장했습니다.\n\n${summary}`;
         console.log(successMessage);
-        await redis.set(redisKey, JSON.stringify({ results: finalResults, analyzedAt: new Date().toISOString() }));
+        await redis.set(redisKey, JSON.stringify({ summary: marketSummary, results: finalResults, analyzedAt: new Date().toISOString() }));
         await sendSlackNotification(successMessage, 'good');
     } else {
         const warningMessage = "⚠️ 분석된 유효한 추천 종목이 없어 Redis에 데이터를 저장하지 않았습니다.";
-        console.warn(warningMessage);ㄴ
+        console.warn(warningMessage);
         await sendSlackNotification(warningMessage, 'warning');
     }
 }

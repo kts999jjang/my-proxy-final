@@ -3,12 +3,11 @@ const fetch = require('node-fetch');
 const { Pinecone } = require('@pinecone-database/pinecone');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { Redis } = require('@upstash/redis');
-const { kInvestmentThemes } = require('./constants');
 
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
 const BATCH_SIZE = 100;
-const DAYS_TO_FETCH = 1; // ✨ 매일 실행되므로, 최근 하루치 데이터만 수집하여 누적합니다.
+const DAYS_TO_FETCH = 1; // 매일 실행되므로, 최근 하루치 데이터만 수집하여 누적합니다.
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -51,20 +50,18 @@ async function main() {
 
     console.log(`\n[${i + 1}/${DAYS_TO_FETCH}] ${targetDate.toISOString().split('T')[0]} 날짜의 데이터를 수집합니다...`);
 
-    for (const [themeName, themeData] of Object.entries(kInvestmentThemes)) {
-      try {
-        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(themeData.query)}&topic=business,technology&lang=en&max=100&from=${from.toISOString()}&to=${to.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
+    try {
+        // ✨ FIX: "투자"와 직접 관련된 양질의 뉴스만 선별하여 수집하도록 쿼리를 수정합니다.
+        const query = '("stock market" OR "earnings report" OR investment OR "financial results" OR acquisition OR partnership) AND (technology OR finance OR business)';
+        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=100&from=${from.toISOString()}&to=${to.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
         const response = await fetch(gnewsUrl);
         const data = await response.json();
         if (data.articles) {
-          // ✨ FIX: 각 기사에 테마 이름을 추가하여 저장
-          const articlesWithTheme = data.articles.map(article => ({ ...article, theme: themeName }));
-          allArticles.push(...articlesWithTheme);
-          console.log(`  - '${themeName}' 테마 기사 ${data.articles.length}개 수집 완료.`);
+            allArticles.push(...data.articles);
+            console.log(`  - 투자 관련 기사 ${data.articles.length}개 수집 완료.`);
         }
-      } catch (e) {
-        console.error(`'${themeName}' 테마 기사 수집 중 오류 발생:`, e);
-      }
+    } catch (e) {
+        console.error(`뉴스 기사 수집 중 오류 발생:`, e);
     }
   }
   
@@ -88,7 +85,6 @@ async function main() {
           source: article.source.name,
           url: article.url,
           publishedAt: publishedAtTimestamp,
-          theme: article.theme, // ✨ FIX: 기사에 저장된 테마 이름을 메타데이터로 사용
         },
       });
       
