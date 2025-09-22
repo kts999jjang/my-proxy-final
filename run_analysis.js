@@ -273,7 +273,7 @@ async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
         // 임의의 벡터로 쿼리하여 최신 기사를 가져옵니다. (필터링이 핵심)
         const queryResult = await index.query({
             topK: 200, // 트렌드 분석을 위해 200개 기사 샘플링
-            vector: Array(1024).fill(0), // 의미 없는 벡터, 필터링이 목적
+            vector: Array(768).fill(0), // ✨ FIX: Pinecone 인덱스 차원(768)과 일치시킵니다.
             includeMetadata: true,
             filter: { "publishedAt": { "$gte": startTimestamp } },
         });
