@@ -87,7 +87,8 @@ async function main() {
   let vectors = [];
   for (const article of uniqueArticles) {
     try {
-      const embeddingResult = await embeddingModel.embedContent(article.title);
+      // ✨ FIX: run_analysis.js와 동일한 임베딩 모델 및 taskType을 사용하여 차원 불일치 문제를 해결합니다.
+      const embeddingResult = await embeddingModel.embedContent({ content: { parts: [{ text: article.title }] }, taskType: "RETRIEVAL_DOCUMENT" });
       const vector = embeddingResult.embedding.values;
       
       const publishedAtTimestamp = Math.floor(new Date(article.publishedAt).getTime() / 1000);

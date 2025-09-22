@@ -311,12 +311,15 @@ Provide the output ONLY in JSON format like this example:
     } catch (error) {
         console.error("동적 테마 생성 중 오류 발생. 기본 테마를 사용합니다.", error);
         // ✨ FIX: GNews API 실패 시에도 유의미한 분석이 가능하도록 기본 테마를 더 정교하게 구성합니다.
+        // ✨ FIX: 오류 발생 시에도 정상 실행과 동일한 데이터 구조({ themes, summary })를 반환하여 타입 오류를 방지합니다.
         return {
-            '소비재 투자': { query: '("consumer spending" OR "retail sales") AND (Walmart OR Amazon OR Target)' },
-            '금 시장 투자': { query: '("gold price" OR "gold market") AND ("Barrick Gold" OR Newmont)' },
-            '부동산 투자': { query: '("real estate" OR "housing market") AND (Prologis OR "Simon Property Group")' },
-            '신규 공개(IPO) 투자': { query: '("initial public offering" OR "IPO") AND (stock OR market)' },
-            '에너지 투자': { query: '("oil price" OR "energy sector") AND (Exxon OR Chevron)' }
+            summary: "최신 시장 동향을 가져오는 데 실패하여, 주요 기본 테마를 기반으로 분석을 진행합니다.",
+            themes: {
+                '인공지능 & 반도체': { query: '("artificial intelligence" OR "semiconductor") AND (NVIDIA OR AMD OR Intel)' },
+                '클라우드 & 데이터센터': { query: '("cloud computing" OR "data center") AND ("Amazon AWS" OR "Microsoft Azure")' },
+                '전기차 & 자율주행': { query: '("electric vehicle" OR "self-driving") AND (Tesla OR Rivian)' },
+                '바이오 & 헬스케어': { query: '("biotechnology" OR "pharmaceutical") AND (Moderna OR Pfizer)' },
+            }
         };
     }
 }
