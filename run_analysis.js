@@ -4,6 +4,7 @@ const { Pinecone } = require('@pinecone-database/pinecone');
 const { Redis } = require('@upstash/redis');
 const nlp = require('compromise');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -231,12 +232,73 @@ async function sendSlackNotification(message, color = 'good') {
     }
 }
 
+class AIService {
+    constructor() {
+        this.providers = [];
+        if (process.env.GEMINI_API_KEY) {
+            this.providers.push({
+                name: 'Gemini',
+                client: new GoogleGenerativeAI(process.env.GEMINI_API_KEY),
+                generate: this.generateWithGemini,
+            });
+        }
+        if (process.env.GROQ_API_KEY) {
+            this.providers.push({
+                name: 'Groq',
+                client: new Groq({ apiKey: process.env.GROQ_API_KEY }),
+                generate: this.generateWithGroq,
+            });
+        }
+    }
+
+    async generateWithGemini(client, prompt) {
+        const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
+        const result = await model.generateContent(prompt);
+        return result.response.text();
+    }
+
+    async generateWithGroq(client, prompt) {
+        const chatCompletion = await client.chat.completions.create({
+            messages: [{ role: 'user', content: prompt }],
+            model: 'llama3-8b-8192',
+            temperature: 0.3,
+            response_format: { type: "json_object" },
+        });
+        return chatCompletion.choices[0]?.message?.content || "";
+    }
+
+    async generateContent(prompt) {
+        if (this.providers.length === 0) {
+            throw new Error("사용 가능한 AI 서비스가 없습니다. API 키를 확인하세요.");
+        }
+
+        for (const provider of this.providers) {
+            try {
+                console.log(`  - ${provider.name} API를 사용하여 콘텐츠 생성을 시도합니다...`);
+                const result = await provider.generate(provider.client, prompt);
+                console.log(`  - ${provider.name} API 호출 성공!`);
+                return result;
+            } catch (error) {
+                // 429 (Too Many Requests) 또는 5xx (Server Error)일 경우 다음 프로바이더로 넘어감
+                if (error.status === 429 || (error.status >= 500 && error.status < 600)) {
+                    console.warn(`  - ${provider.name} API 오류 발생 (Status: ${error.status}). 다음 API로 넘어갑니다...`);
+                    continue;
+                }
+                // 그 외의 오류는 즉시 throw
+                throw error;
+            }
+        }
+
+        // 모든 프로바이더가 실패했을 경우
+        throw new Error("모든 AI 서비스 호출에 실패했습니다. API 할당량 및 상태를 확인하세요.");
+    }
+}
+
 /**
- * Gemini AI를 사용하여 최신 뉴스 기반으로 동적 투자 테마와 쿼리를 생성합니다.
- * @param {GoogleGenerativeAI} genAI - GoogleGenerativeAI 인스턴스
+ * AI 서비스를 사용하여 최신 뉴스 기반으로 동적 투자 테마와 쿼리를 생성합니다.
  * @returns {Promise<Object>} 동적으로 생성된 투자 테마 객체
  */
-async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
+async function generateDynamicThemes(aiService, pinecone, daysToAnalyze) {
     // ✨ DEBUG: 함수 시작 로그 추가
     console.log("🤖 AI를 사용하여 최신 투자 테마를 동적으로 생성합니다...");
     try {
@@ -280,9 +342,8 @@ Provide the output ONLY in JSON format like this example:
 
         // ✨ DEBUG: Gemini에게 보낼 프롬프트 확인
         console.log("  - Gemini에게 보낼 프롬프트의 일부:\n", prompt.substring(0, 500) + "...");
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text();
+        // ✨ FIX: 추상화된 AI 서비스를 통해 콘텐츠 생성
+        const responseText = await aiService.generateContent(prompt);
         
         // ✨ FIX: AI 응답 파싱 안정성 강화를 위한 디버깅 및 예외 처리 추가
         console.log("  - AI로부터 받은 원본 응답:\n", responseText);
@@ -330,7 +391,7 @@ async function main() {
     console.log(`분석 기간: ${daysToAnalyze}일, Redis 저장 키: ${redisKey}`);
 
     const pinecone = new Pinecone();
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const aiService = new AIService(); // ✨ FIX: AI 서비스 클래스 인스턴스화
     const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model: "text-embedding-004" });
     const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL,
@@ -339,8 +400,8 @@ async function main() {
 
     await sendSlackNotification("📈 주식 분석 스크립트를 시작합니다...", '#439FE0');
 
-    // ✨ FIX: AI를 사용하여 동적으로 투자 테마를 생성
-    const { themes: kInvestmentThemes, summary: marketSummary } = await generateDynamicThemes(genAI, pinecone, daysToAnalyze);
+    // ✨ FIX: 추상화된 AI 서비스를 사용하여 동적으로 투자 테마 생성
+    const { themes: kInvestmentThemes, summary: marketSummary } = await generateDynamicThemes(aiService, pinecone, daysToAnalyze);
 
     // ✨ FIX: Redis에서 모든 주식 정보를 가져와 메모리에 로드
     const kTickerInfo = await redis.hgetall('stock-info') || {};
@@ -424,10 +485,8 @@ async function main() {
 
                         // 테마 키워드가 (1) 영어 산업명 자체와 일치하거나, (2) 매핑 테이블의 한글 번역과 일치하는지 확인
                         // ✨ FIX: 더 정확한 매치를 위해, 영어 산업명을 먼저 한글 키워드로 변환 후 비교합니다.
-                        const mappedIndustryKeywords = Object.entries(industryMap).reduce((acc, [en, kr]) => {
-                            if (industryEn.includes(en)) return [...acc, ...kr];
-                            return acc;
-                        }, []);
+                        // ✨ FIX: 부분 일치가 아닌 정확한 일치를 통해 매핑 정확도를 높입니다.
+                        const mappedIndustryKeywords = industryMap[industryEn] || [];
                         const isRelevant = themeKeywords.some(themeKw => mappedIndustryKeywords.includes(themeKw));
 
                         if (isRelevant) {
