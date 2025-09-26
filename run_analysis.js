@@ -84,25 +84,6 @@ async function getMarketCap(ticker) {
 /**
  * Finnhub API를 사용해 내부자 거래 동향을 조회하는 함수
  * @param {string} ticker
- * @returns {Promise<object|null>}
- */
-async function getBasicFinancials(ticker) {
-    const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
-    try {
-        await sleep(1100);
-        const response = await fetch(url);
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data?.metric || null;
-    } catch (e) {
-        console.warn(`  - ${ticker}의 기본 재무 정보 조회 중 오류: ${e.message}`);
-        return null;
-    }
-}
-
-/**
- * Yahoo Finance에서 특정 티커의 현재가를 조회합니다.
- * @param {string} ticker
  * @returns {Promise<number|null>}
  */
 async function getCurrentPriceFromYahoo(ticker) {
@@ -148,45 +129,21 @@ async function getAnalystRatingScore(ticker) {
 }
 
 /**
- * Finnhub API를 사용해 기본 재무 정보를 조회하고 점수를 매기는 함수
+ * Finnhub API를 사용해 모든 필요한 재무 지표를 한 번에 조회하는 함수
  * @param {string} ticker - 주식 티커
- * @returns {Promise<number>} 재무 점수
+ * @returns {Promise<object|null>} 재무 지표 객체
  */
-async function getFinancialsScore(ticker) {
-    try {
-        const pe = await getFinancialsMetric(ticker, 'peNormalizedAnnual');
-        const pb = await getFinancialsMetric(ticker, 'pbAnnual');
-        let score = 0;
-
-        // P/E 비율이 낮을수록 높은 점수 (30 미만일 때)
-        if (pe && pe < 30) {
-            score += (1 - pe / 30) * 5;
-        }
-        // P/B 비율이 낮을수록 높은 점수 (3 미만일 때)
-        if (pb && pb < 3) {
-            score += (1 - pb / 3) * 5;
-        }
-        return score;
-    } catch (e) {
-        console.warn(`  - ${ticker}의 재무 정보 조회 중 오류: ${e.message}`);
-        return 0;
-    }
-}
-
-async function getFinancialsMetric(ticker, metricName) {
+async function getFinancialMetrics(ticker) {
     const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${process.env.FINNHUB_API_KEY}`;
     try {
         await sleep(1100); // API 호출 제한 준수
         const response = await fetch(url);
-        const text = await response.text();
-        let data;
-        try {
-            data = JSON.parse(text);
-        } catch (e) {
-            console.warn(`  - ${ticker}의 재무 정보 API가 유효하지 않은 응답을 반환했습니다.`);
+        if (!response.ok) {
+            console.warn(`  - ${ticker}의 재무 지표 조회 실패: Status ${response.status}`);
             return null;
         }
-        return data?.metric ? data.metric[metricName] : null;
+        const data = await response.json();
+        return data?.metric || null;
     } catch (e) {
         return null;
     }
@@ -468,11 +425,10 @@ async function main() {
                 console.log(`    - API 호출 묶음 처리 중 (${i + 1} - ${i + chunk.length})...`);
                 // ✨ FIX: getCompanyProfile 호출이 추가되었으므로, Promise.all에 추가합니다.
                 const chunkPromises = chunk.map(c => Promise.all([
-                    getBasicFinancials(c.ticker),      // API call 1
-                    getAnalystRatingScore(c.ticker),   // API call 2
-                    getEarningsSurpriseScore(c.ticker),// API call 3
-                    getFinancialsScore(c.ticker),      // API call 4
-                    getCurrentPriceFromYahoo(c.ticker) // API call 5
+                    getFinancialMetrics(c.ticker),      // API Call 1: 모든 재무/기본 정보
+                    getAnalystRatingScore(c.ticker),    // API Call 2: 애널리스트 평가
+                    getEarningsSurpriseScore(c.ticker), // API Call 3: 어닝 서프라이즈
+                    getCurrentPriceFromYahoo(c.ticker)  // API Call 4: 현재가 (Yahoo)
                 ]));
                 const chunkResults = await Promise.all(chunkPromises);
                 analysisResults.push(...chunkResults);
@@ -483,18 +439,28 @@ async function main() {
             const scoredStocks = [];
             for (let i = 0; i < candidatesForAnalysis.length; i++) {
                 const { ticker, newsScore } = candidatesForAnalysis[i];
-                const [basicFinancials, analystScore, surpriseScore, financialsScore, currentPrice] = analysisResults[i];
+                const [metrics, analystScore, surpriseScore, currentPrice] = analysisResults[i];
 
-                // ✨ FIX: 기본 재무 정보에서 새로운 지표 추출
-                const marketCap = basicFinancials?.marketCapitalization || 0;
+                if (!metrics) {
+                    console.log(`  - [${ticker}] 재무 정보가 없어 분석을 건너뜁니다.`);
+                    continue;
+                }
+
+                // ✨ FIX: 통합된 재무 지표에서 각 점수 계산
+                const marketCap = metrics.marketCapitalization || 0;
+                const pe = metrics.peNormalizedAnnual;
+                const pb = metrics.pbAnnual;
+                let financialsScore = 0;
+                if (pe && pe > 0 && pe < 30) financialsScore += (1 - pe / 30) * 5;
+                if (pb && pb > 0 && pb < 3) financialsScore += (1 - pb / 3) * 5;
                 
                 // '베타' 점수: 1보다 낮을수록 안정적이라고 판단하여 높은 점수 부여 (최대 10점)
-                const beta = basicFinancials?.beta || 1.5; // 데이터 없으면 1.5로 간주
+                const beta = metrics.beta || 1.5; // 데이터 없으면 1.5로 간주
                 const betaScore = Math.max(0, (1.5 - beta) / 1.5 * 10);
 
                 // '상승 잠재력' 점수: 52주 최고가 대비 현재가가 낮을수록 높은 점수 (최대 10점)
-                const high52w = basicFinancials?.['52WeekHigh'];
-                const low52w = basicFinancials?.['52WeekLow'];
+                const high52w = metrics['52WeekHigh'];
+                const low52w = metrics['52WeekLow'];
                 const potentialScore = (high52w && currentPrice) ? ((high52w - currentPrice) / (high52w - low52w || 1)) * 10 : 0;
 
                 const sentimentScore = analyzeLocalNewsSentiment(ticker, allFoundArticles, kTickerInfo);
