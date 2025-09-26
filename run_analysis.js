@@ -262,7 +262,7 @@ async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
         if (!articleTitles) throw new Error("Pinecone에서 분석할 최신 뉴스를 찾지 못했습니다.");
 
         // 2. Gemini에 테마 및 쿼리 생성 요청
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
         const prompt = `Based on the following recent news headlines, provide two things in a single JSON object:
 1. A "summary" of the overall market trends from these headlines, written in Korean, within 2-3 sentences.
 2. A "themes" object containing the top 5 most promising investment themes. For each theme, provide a concise theme name in Korean and a GNews search query in English, structured like '("core technology" OR "synonym") AND (CompanyName OR "Another Company")'.
@@ -403,12 +403,23 @@ async function main() {
                     const companyInfo = await getTickerForCompanyName(orgName, redis);
                     if (companyInfo && companyInfo.ticker) {
                         // ✨ FIX: 산업 분류를 확인하여 테마와의 관련성을 검증합니다.
+                        // ✨ FIX: 한/영 산업 분류 매핑 테이블을 추가하여 정확도를 높입니다.
+                        const industryMap = {
+                            'semiconductors': ['반도체'],
+                            'software': ['소프트웨어', 'ai', '인공지능', '클라우드'],
+                            'technology': ['기술', 'ai', '인공지능', '클라우드'],
+                            'health care': ['바이오', '헬스케어', '제약'],
+                            'automobiles': ['전기차', '자율주행', '자동차'],
+                            'energy': ['에너지', '친환경'],
+                            'media': ['미디어', '엔터테인먼트'],
+                        };
+
                         const industry = await getCompanyProfile(companyInfo.ticker);
                         const themeKeywords = themeName.toLowerCase().match(/[\w&]+/g) || [];
-                        const industryKeywords = industry ? industry.toLowerCase().match(/[\w&]+/g) || [] : [];
+                        const industryEn = industry ? industry.toLowerCase() : '';
 
-                        // 테마 이름의 키워드 중 하나라도 산업 분류에 포함되면 관련성 있는 것으로 간주
-                        const isRelevant = themeKeywords.some(themeKw => industryKeywords.includes(themeKw));
+                        // 테마 키워드가 (1) 영어 산업명 자체와 일치하거나, (2) 매핑 테이블의 한글 번역과 일치하는지 확인
+                        const isRelevant = themeKeywords.some(themeKw => industryEn.includes(themeKw) || (industryMap[industryEn] && industryMap[industryEn].includes(themeKw)));
 
                         if (isRelevant) {
                             const newTicker = companyInfo.ticker;
