@@ -49,6 +49,25 @@ async function getTickerForCompanyName(companyName, redis) {
 }
 
 /**
+ * Finnhub API를 사용해 회사의 프로필(산업 분류)을 조회하는 함수
+ * @param {string} ticker
+ * @returns {Promise<string|null>} 회사의 산업 분류 또는 null
+ */
+async function getCompanyProfile(ticker) {
+    const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${ticker}&token=${process.env.FINNHUB_API_KEY}`;
+    try {
+        await sleep(1100); // API 호출 제한 준수
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data?.finnhubIndustry || null; // 산업 분류 반환
+    } catch (e) {
+        console.warn(`  - ${ticker}의 회사 프로필 조회 중 오류: ${e.message}`);
+        return null;
+    }
+}
+
+/**
  * Alpha Vantage API를 사용해 시가총액을 조회하는 함수
  * @param {string} ticker - 주식 티커
  * @returns {Promise<number|null>} 시가총액 또는 null
@@ -406,15 +425,30 @@ async function main() {
 
             // ✨ FIX: 모든 기관명에 대해 티커를 조회하고 점수를 집계
             for (const [orgName, count] of Object.entries(organizationCounts)) {
-                const companyInfo = await getTickerForCompanyName(orgName, redis);
-                if (companyInfo && companyInfo.ticker) {
-                    const newTicker = companyInfo.ticker;
-                    themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + count;
+                try {
+                    const companyInfo = await getTickerForCompanyName(orgName, redis);
+                    if (companyInfo && companyInfo.ticker) {
+                        // ✨ FIX: 산업 분류를 확인하여 테마와의 관련성을 검증합니다.
+                        const industry = await getCompanyProfile(companyInfo.ticker);
+                        const themeKeywords = themeName.toLowerCase().match(/[\w&]+/g) || [];
+                        const industryKeywords = industry ? industry.toLowerCase().match(/[\w&]+/g) || [] : [];
 
-                    if (!kTickerInfo[newTicker]) {
-                        const newInfo = { name: companyInfo.companyName, style: 'growth', keywords: [orgName.toLowerCase()] };
-                        kTickerInfo[newTicker] = JSON.stringify(newInfo);
+                        // 테마 이름의 키워드 중 하나라도 산업 분류에 포함되면 관련성 있는 것으로 간주
+                        const isRelevant = themeKeywords.some(themeKw => industryKeywords.includes(themeKw));
+
+                        if (isRelevant) {
+                            const newTicker = companyInfo.ticker;
+                            themeTickerScores[newTicker] = (themeTickerScores[newTicker] || 0) + count;
+                            if (!kTickerInfo[newTicker]) {
+                                const newInfo = { name: companyInfo.companyName, style: 'growth', keywords: [orgName.toLowerCase()] };
+                                kTickerInfo[newTicker] = JSON.stringify(newInfo);
+                            }
+                        } else {
+                            console.log(`  - [${companyInfo.ticker}] ${companyInfo.companyName}는 '${themeName}' 테마와 관련성이 낮아 제외합니다. (산업: ${industry || 'N/A'})`);
+                        }
                     }
+                } catch (e) {
+                    console.warn(`  - '${orgName}' 처리 중 오류 발생: ${e.message}`);
                 }
             }
 
@@ -432,6 +466,7 @@ async function main() {
             for (let i = 0; i < candidatesForAnalysis.length; i += CHUNK_SIZE) {
                 const chunk = candidatesForAnalysis.slice(i, i + CHUNK_SIZE);
                 console.log(`    - API 호출 묶음 처리 중 (${i + 1} - ${i + chunk.length})...`);
+                // ✨ FIX: getCompanyProfile 호출이 추가되었으므로, Promise.all에 추가합니다.
                 const chunkPromises = chunk.map(c => Promise.all([
                     getBasicFinancials(c.ticker),      // API call 1
                     getAnalystRatingScore(c.ticker),   // API call 2
