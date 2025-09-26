@@ -260,7 +260,7 @@ class AIService {
     async generateWithGroq(client, prompt) {
         const chatCompletion = await client.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
-            model: 'llama3-8b-8192',
+            model: 'llama3-70b-8192', // ✨ FIX: 지원이 중단된 모델을 최신 모델로 변경합니다.
             temperature: 0.3,
             response_format: { type: "json_object" },
         });
