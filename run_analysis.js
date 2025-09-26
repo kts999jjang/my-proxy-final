@@ -262,7 +262,6 @@ async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
         if (!articleTitles) throw new Error("Pinecone에서 분석할 최신 뉴스를 찾지 못했습니다.");
 
         // 2. Gemini에 테마 및 쿼리 생성 요청
-        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
         const prompt = `Based on the following recent news headlines, provide two things in a single JSON object:
 1. A "summary" of the overall market trends from these headlines, written in Korean, within 2-3 sentences.
 2. A "themes" object containing the top 5 most promising investment themes. For each theme, provide a concise theme name in Korean and a GNews search query in English, structured like '("core technology" OR "synonym") AND (CompanyName OR "Another Company")'.
@@ -281,11 +280,12 @@ Provide the output ONLY in JSON format like this example:
 
         // ✨ DEBUG: Gemini에게 보낼 프롬프트 확인
         console.log("  - Gemini에게 보낼 프롬프트의 일부:\n", prompt.substring(0, 500) + "...");
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
         const result = await model.generateContent(prompt);
         const responseText = result.response.text();
         
         // ✨ FIX: AI 응답 파싱 안정성 강화를 위한 디버깅 및 예외 처리 추가
-        console.log("  - Gemini AI로부터 받은 원본 응답:\n", responseText);
+        console.log("  - AI로부터 받은 원본 응답:\n", responseText);
         
         // 응답에서 JSON 부분만 추출 (마크다운 코드 블록 제거)
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -330,9 +330,8 @@ async function main() {
     console.log(`분석 기간: ${daysToAnalyze}일, Redis 저장 키: ${redisKey}`);
 
     const pinecone = new Pinecone();
-    const index = pinecone.index('gcp-starter-gemini');
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+    const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model: "text-embedding-004" });
     const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL,
         token: process.env.UPSTASH_REDIS_REST_TOKEN,
@@ -360,6 +359,7 @@ async function main() {
 
             // 1. 테마 쿼리 자체를 직접 임베딩하여 관련 기사 검색 (요약 단계 삭제)
             console.log(`  - '${themeName}' 테마 쿼리를 임베딩하여 관련 기사를 검색합니다.`);
+            const index = pinecone.index('gcp-starter-gemini');
             const embeddingResult = await embeddingModel.embedContent({
                 content: { parts: [{ text: themeData.query }] },
                 taskType: "RETRIEVAL_QUERY",
@@ -403,15 +403,19 @@ async function main() {
                     const companyInfo = await getTickerForCompanyName(orgName, redis);
                     if (companyInfo && companyInfo.ticker) {
                         // ✨ FIX: 산업 분류를 확인하여 테마와의 관련성을 검증합니다.
-                        // ✨ FIX: 한/영 산업 분류 매핑 테이블을 추가하여 정확도를 높입니다.
+                        // ✨ FIX: 한/영 산업 분류 매핑 테이블을 개선하여 정확도를 높입니다.
                         const industryMap = {
                             'semiconductors': ['반도체'],
                             'software': ['소프트웨어', 'ai', '인공지능', '클라우드'],
                             'technology': ['기술', 'ai', '인공지능', '클라우드'],
                             'health care': ['바이오', '헬스케어', '제약'],
+                            'pharmaceuticals': ['바이오', '헬스케어', '제약'],
                             'automobiles': ['전기차', '자율주행', '자동차'],
                             'energy': ['에너지', '친환경'],
                             'media': ['미디어', '엔터테인먼트'],
+                            'real estate': ['부동산'],
+                            'financial services': ['금융'],
+                            'insurance': ['보험'],
                         };
 
                         const industry = await getCompanyProfile(companyInfo.ticker);
@@ -419,7 +423,12 @@ async function main() {
                         const industryEn = industry ? industry.toLowerCase() : '';
 
                         // 테마 키워드가 (1) 영어 산업명 자체와 일치하거나, (2) 매핑 테이블의 한글 번역과 일치하는지 확인
-                        const isRelevant = themeKeywords.some(themeKw => industryEn.includes(themeKw) || (industryMap[industryEn] && industryMap[industryEn].includes(themeKw)));
+                        // ✨ FIX: 더 정확한 매치를 위해, 영어 산업명을 먼저 한글 키워드로 변환 후 비교합니다.
+                        const mappedIndustryKeywords = Object.entries(industryMap).reduce((acc, [en, kr]) => {
+                            if (industryEn.includes(en)) return [...acc, ...kr];
+                            return acc;
+                        }, []);
+                        const isRelevant = themeKeywords.some(themeKw => mappedIndustryKeywords.includes(themeKw));
 
                         if (isRelevant) {
                             const newTicker = companyInfo.ticker;
