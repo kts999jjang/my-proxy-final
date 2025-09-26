@@ -237,6 +237,7 @@ async function sendSlackNotification(message, color = 'good') {
  * @returns {Promise<Object>} 동적으로 생성된 투자 테마 객체
  */
 async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
+    // ✨ DEBUG: 함수 시작 로그 추가
     console.log("🤖 AI를 사용하여 최신 투자 테마를 동적으로 생성합니다...");
     try {
         // ✨ FIX: Pinecone에서 최신 뉴스 제목을 가져와 트렌드 분석에 사용합니다.
@@ -246,6 +247,7 @@ async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
         startDate.setDate(startDate.getDate() - daysToAnalyze);
         const startTimestamp = Math.floor(startDate.getTime() / 1000);
 
+        // ✨ DEBUG: Pinecone 쿼리 시작 로그 추가
         // 임의의 벡터로 쿼리하여 최신 기사를 가져옵니다. (필터링이 핵심)
         const queryResult = await index.query({
             topK: 200, // 트렌드 분석을 위해 200개 기사 샘플링
@@ -254,6 +256,8 @@ async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
             filter: { "publishedAt": { "$gte": startTimestamp } },
         });
 
+        // ✨ DEBUG: Pinecone 쿼리 결과 확인
+        console.log(`  - Pinecone에서 ${queryResult.matches.length}개의 뉴스 제목을 가져왔습니다.`);
         const articleTitles = queryResult.matches.map(match => match.metadata.title).join('\n');
         if (!articleTitles) throw new Error("Pinecone에서 분석할 최신 뉴스를 찾지 못했습니다.");
 
@@ -275,6 +279,8 @@ Provide the output ONLY in JSON format like this example:
   }
 }`;
 
+        // ✨ DEBUG: Gemini에게 보낼 프롬프트 확인
+        console.log("  - Gemini에게 보낼 프롬프트의 일부:\n", prompt.substring(0, 500) + "...");
         const result = await model.generateContent(prompt);
         const responseText = result.response.text();
         
@@ -295,7 +301,8 @@ Provide the output ONLY in JSON format like this example:
         return { themes: dynamicThemes, summary: marketSummary };
 
     } catch (error) {
-        console.error("동적 테마 생성 중 오류 발생. 기본 테마를 사용합니다.", error);
+        // ✨ DEBUG: 오류 발생 시 더 상세한 정보 로깅
+        console.error("동적 테마 생성 중 치명적인 오류 발생. 기본 테마를 사용합니다. 오류 상세:", error);
         // ✨ FIX: GNews API 실패 시에도 유의미한 분석이 가능하도록 기본 테마를 더 정교하게 구성합니다.
         // ✨ FIX: 오류 발생 시에도 정상 실행과 동일한 데이터 구조({ themes, summary })를 반환하여 타입 오류를 방지합니다.
         return {
