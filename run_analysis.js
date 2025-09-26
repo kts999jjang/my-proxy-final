@@ -260,7 +260,7 @@ class AIService {
     async generateWithGroq(client, prompt) {
         const chatCompletion = await client.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
-            model: 'llama3-70b-8192', // ✨ FIX: 지원이 중단된 모델을 최신 모델로 변경합니다.
+            model: 'gemma-7b-it', // ✨ FIX: 지원이 중단된 모델을 현재 사용 가능한 모델로 변경합니다.
             temperature: 0.3,
             response_format: { type: "json_object" },
         });
@@ -485,8 +485,8 @@ async function main() {
 
                         // 테마 키워드가 (1) 영어 산업명 자체와 일치하거나, (2) 매핑 테이블의 한글 번역과 일치하는지 확인
                         // ✨ FIX: 더 정확한 매치를 위해, 영어 산업명을 먼저 한글 키워드로 변환 후 비교합니다.
-                        // ✨ FIX: 부분 일치가 아닌 정확한 일치를 통해 매핑 정확도를 높입니다.
-                        const mappedIndustryKeywords = industryMap[industryEn] || [];
+                        // ✨ FIX: industryEn을 소문자로 변환하여 industryMap의 키와 정확히 일치시키도록 수정합니다.
+                        const mappedIndustryKeywords = industryMap[industryEn.toLowerCase()] || [];
                         const isRelevant = themeKeywords.some(themeKw => mappedIndustryKeywords.includes(themeKw));
 
                         if (isRelevant) {
