@@ -284,9 +284,9 @@ async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
     try {
         // ✨ FIX: Pinecone에서 최신 뉴스 제목을 가져와 트렌드 분석에 사용합니다.
         const index = pinecone.index('gcp-starter-gemini');
-        const now = new Date();
-        // ✨ FIX: 분석 기간에 맞춰 뉴스 샘플링 기간을 동적으로 설정합니다.
-        const startDate = new Date(now.setDate(now.getDate() - daysToAnalyze));
+        // ✨ FIX: 원본 Date 객체가 변경되지 않도록 날짜 계산 방식을 수정합니다.
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - daysToAnalyze);
         const startTimestamp = Math.floor(startDate.getTime() / 1000);
 
         // 임의의 벡터로 쿼리하여 최신 기사를 가져옵니다. (필터링이 핵심)
