@@ -262,7 +262,7 @@ async function generateDynamicThemes(genAI, pinecone, daysToAnalyze) {
         if (!articleTitles) throw new Error("Pinecone에서 분석할 최신 뉴스를 찾지 못했습니다.");
 
         // 2. Gemini에 테마 및 쿼리 생성 요청
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
         const prompt = `Based on the following recent news headlines, provide two things in a single JSON object:
 1. A "summary" of the overall market trends from these headlines, written in Korean, within 2-3 sentences.
 2. A "themes" object containing the top 5 most promising investment themes. For each theme, provide a concise theme name in Korean and a GNews search query in English, structured like '("core technology" OR "synonym") AND (CompanyName OR "Another Company")'.
