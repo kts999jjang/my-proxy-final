@@ -276,12 +276,22 @@ Provide the output ONLY in JSON format like this example:
 }`;
 
         const result = await model.generateContent(prompt);
-        const jsonString = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-        const generatedData = JSON.parse(jsonString);
+        const responseText = result.response.text();
+        
+        // ✨ FIX: AI 응답 파싱 안정성 강화를 위한 디버깅 및 예외 처리 추가
+        console.log("  - Gemini AI로부터 받은 원본 응답:\n", responseText);
+        
+        // 응답에서 JSON 부분만 추출 (마크다운 코드 블록 제거)
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+            throw new Error("AI 응답에서 유효한 JSON 객체를 찾을 수 없습니다.");
+        }
+        const jsonString = jsonMatch[0];
+        const generatedData = JSON.parse(jsonString); // 여기서 오류 발생 시 catch 블록으로 이동
         const dynamicThemes = generatedData.themes;
         const marketSummary = generatedData.summary;
 
-        console.log("✅ 동적 테마 및 요약 생성 완료:", Object.keys(dynamicThemes).join(', '));
+        console.log("✅ 동적 테마 및 요약 생성 완료:", Object.keys(dynamicThemes || {}).join(', '));
         return { themes: dynamicThemes, summary: marketSummary };
 
     } catch (error) {
