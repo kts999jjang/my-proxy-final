@@ -260,7 +260,7 @@ class AIService {
     async generateWithGroq(client, prompt) {
         const chatCompletion = await client.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
-            model: 'gemma-7b-it', // ✨ FIX: 지원이 중단된 모델을 현재 사용 가능한 모델로 변경합니다.
+            model: 'mixtral-8x7b-32768', // ✨ FIX: 지원이 중단된 모델을 현재 사용 가능한 모델로 변경합니다.
             temperature: 0.3,
             response_format: { type: "json_object" },
         });
@@ -480,7 +480,8 @@ async function main() {
                         };
 
                         const industry = await getCompanyProfile(companyInfo.ticker);
-                        const themeKeywords = themeName.toLowerCase().match(/[\w&]+/g) || [];
+                        // ✨ FIX: 정규식에 유니코드 플래그(u)와 속성(\p{L})을 추가하여 한글 키워드를 올바르게 파싱합니다.
+                        const themeKeywords = themeName.toLowerCase().match(/[\p{L}&]+/gu) || [];
                         const industryEn = industry ? industry.toLowerCase() : '';
 
                         // 테마 키워드가 (1) 영어 산업명 자체와 일치하거나, (2) 매핑 테이블의 한글 번역과 일치하는지 확인
