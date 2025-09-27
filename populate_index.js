@@ -17,7 +17,7 @@ async function main() {
 
   const pinecone = new Pinecone();
   const index = pinecone.index(INDEX_NAME);
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' });
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
   const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL,

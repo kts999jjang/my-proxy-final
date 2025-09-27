@@ -260,7 +260,7 @@ class AIService {
     async generateWithGroq(client, prompt) {
         const chatCompletion = await client.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
-            model: 'llama3-8b-8192', // ✨ FIX: 현재 사용 가능한 최신 모델로 변경합니다.
+            model: 'llama3-8b-8192',
             temperature: 0.3,
             response_format: { type: "json_object" },
         });
@@ -392,7 +392,7 @@ async function main() {
 
     const pinecone = new Pinecone();
     const aiService = new AIService(); // ✨ FIX: AI 서비스 클래스 인스턴스화
-    const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' }).getGenerativeModel({ model: "text-embedding-004" });
+    const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model: "text-embedding-004" });
     const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL,
         token: process.env.UPSTASH_REDIS_REST_TOKEN,
