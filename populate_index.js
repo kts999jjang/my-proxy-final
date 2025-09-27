@@ -202,7 +202,8 @@ async function main() {
   // ✨ FIX: 작업 완료 후 최종 통계를 다시 조회하여 로그에 남깁니다.
   console.log("\n4. 최종 데이터 현황을 확인합니다...");
   // 통계가 반영될 시간을 벌기 위해 잠시 대기합니다.
-  await sleep(5000); 
+  // 통계가 반영될 시간을 벌기 위해 잠시 대기합니다. (기존 5초에서 20초로 상향)
+  await sleep(20000); 
   const finalStats = await index.describeIndexStats() || {};
   const finalTotalVectors = finalStats.totalVectorCount ?? 0;
   console.log(`  - 현재 Pinecone 벡터 수: ${finalTotalVectors}개`);
