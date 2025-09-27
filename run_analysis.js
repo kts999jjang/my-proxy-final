@@ -253,8 +253,8 @@ class AIService {
         }
     }
 
-    async generateWithGemini(client, prompt, requestOptions) {
-        const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" }, requestOptions);
+    async generateWithGemini(client, prompt) {
+        const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" }, { apiVersion: 'v1' });
         const result = await model.generateContent(prompt);
         return result.response.text();
     }
@@ -277,7 +277,7 @@ class AIService {
         for (const provider of this.providers) {
             try {
                 console.log(`  - ${provider.name} API를 사용하여 콘텐츠 생성을 시도합니다...`);
-                const result = await provider.generate(provider.client, prompt, provider.requestOptions);
+                const result = await provider.generate(provider.client, prompt);
                 console.log(`  - ${provider.name} API 호출 성공!`);
                 return result;
             } catch (error) {
