@@ -24,8 +24,8 @@ async function main() {
     apiKey: process.env.PINECONE_API_KEY,
   });
   const index = pinecone.index(INDEX_NAME);
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' });
+  const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
   const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN,
