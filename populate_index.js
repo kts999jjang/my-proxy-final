@@ -7,12 +7,17 @@ const { Redis } = require('@upstash/redis');
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
 const BATCH_SIZE = 100;
-const DAYS_TO_FETCH = 3; // ✨ FIX: 데이터 수집 안정성을 위해 최근 3일치 데이터를 수집하도록 변경합니다.
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- 메인 실행 함수 ---
 async function main() {
+  // ✨ FIX: 커맨드 라인 인자에서 수집할 기간을 파싱합니다.
+  const args = process.argv.slice(2);
+  const daysArg = args.find(arg => arg.startsWith('--days='));
+  // 인자가 없으면 기본값 3일, 있으면 해당 값으로 설정 (최대 90일 제한)
+  const DAYS_TO_FETCH = daysArg ? Math.min(parseInt(daysArg.split('=')[1], 10), 90) : 3;
+
   console.log(`데이터 준비 스크립트를 시작합니다... (지난 ${DAYS_TO_FETCH}일)`);
 
   const pinecone = new Pinecone({
@@ -72,7 +77,13 @@ async function main() {
             await sleep(2000); // 2초 후 재시도
         }
 
-        const data = await response.json();
+        // ✨ FIX: 모든 재시도가 실패하여 response가 undefined일 경우를 처리합니다.
+        if (!response || !response.ok) {
+            console.error(`  - ${targetDate.toISOString().split('T')[0]} 날짜의 GNews 데이터 수집에 최종적으로 실패했습니다.`);
+            continue; // 다음 날짜로 넘어감
+        }
+
+        const data = await response.json(); // 이제 response는 항상 유효한 객체입니다.
         if (data.articles) {
             allArticles.push(...data.articles);
             console.log(`  - 비즈니스/기술 기사 ${data.articles.length}개 수집 완료.`);
