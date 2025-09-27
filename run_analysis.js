@@ -277,7 +277,7 @@ class AIService {
         for (const provider of this.providers) {
             try {
                 console.log(`  - ${provider.name} API를 사용하여 콘텐츠 생성을 시도합니다...`);
-                const result = await provider.generate(provider.client, prompt);
+                const result = await provider.generate(provider.client, prompt, provider.requestOptions);
                 console.log(`  - ${provider.name} API 호출 성공!`);
                 return result;
             } catch (error) {
