@@ -2,7 +2,7 @@ require('dotenv').config();
 const fetch = require('node-fetch');
 const { Pinecone } = require('@pinecone-database/pinecone');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { Redis } = require('@upstash/redis');
+const { GoogleGenerativeAI, Groq } = require('@google/generative-ai'); // Groq might not be needed here, but good for consistency
 
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
@@ -11,6 +11,49 @@ const BATCH_SIZE = 100;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- 메인 실행 함수 ---
+
+// This is a simplified version of the AIService from run_analysis.js
+// In a larger project, this would be a shared module.
+class EmbeddingService {
+    constructor() {
+        this.providers = [];
+        if (process.env.GEMINI_API_KEY) {
+            const geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+            this.providers.push({
+                name: 'Gemini',
+                embed: (content) => this.embedWithGemini(geminiClient, content),
+            });
+        }
+    }
+
+    async embedWithGemini(client, content) {
+        const model = client.getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
+        const result = await model.embedContent(content);
+        return result.embedding.values;
+    }
+
+    async embedContent(content) {
+        if (this.providers.length === 0) {
+            throw new Error("사용 가능한 임베딩 서비스가 없습니다.");
+        }
+
+        for (const provider of this.providers) {
+            try {
+                // A simple retry loop for robustness
+                for (let i = 0; i < 3; i++) {
+                    try {
+                        return await provider.embed(content);
+                    } catch (e) {
+                        if (i === 2) throw e; // Rethrow on last attempt
+                        console.warn(`  - ${provider.name} 임베딩 재시도 (${i + 1}/3)...`);
+                        await sleep(1000 * (i + 1));
+                    }
+                }
+            } catch (e) { continue; } // Move to next provider
+        }
+        throw new Error("모든 임베딩 서비스 호출에 실패했습니다.");
+    }
+}
 async function main() {
   // ✨ FIX: 커맨드 라인 인자에서 수집할 기간을 파싱합니다.
   const args = process.argv.slice(2);
@@ -27,10 +70,7 @@ async function main() {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   // ✨ FIX: 라이브러리 명세에 따라 getGenerativeModel의 두 번째 인자로 apiVersion을 전달합니다.
   const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
-  const redis = new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN,
-  });
+  const redis = new (require('@upstash/redis').Redis)({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
 
   // ✨ FIX: 스크립트 시작 시 Pinecone 인덱스의 현재 벡터 수를 확인
   // ✨ FIX: describeIndexStats()의 응답 구조가 변경될 수 있으므로, 더 안전하게 값을 확인합니다.

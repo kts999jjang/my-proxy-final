@@ -243,7 +243,7 @@ class AIService {
         if (process.env.GEMINI_API_KEY) {
             this.providers.push({
                 name: 'Gemini',
-                client: new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' }),
+                client: new GoogleGenerativeAI(process.env.GEMINI_API_KEY),
                 generate: this.generateWithGemini,
             });
         }
