@@ -238,7 +238,8 @@ class AIService {
         if (process.env.GEMINI_API_KEY) {
             this.providers.push({
                 name: 'Gemini',
-                client: new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' }),
+                client: new GoogleGenerativeAI(process.env.GEMINI_API_KEY),
+                requestOptions: { apiVersion: 'v1' },
                 generate: this.generateWithGemini,
             });
         }
@@ -246,13 +247,14 @@ class AIService {
             this.providers.push({
                 name: 'Groq',
                 client: new Groq({ apiKey: process.env.GROQ_API_KEY }),
+                requestOptions: {}, // Groq은 별도 옵션 없음
                 generate: this.generateWithGroq,
             });
         }
     }
 
-    async generateWithGemini(client, prompt) {
-        const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
+    async generateWithGemini(client, prompt, requestOptions) {
+        const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" }, requestOptions);
         const result = await model.generateContent(prompt);
         return result.response.text();
     }
@@ -275,7 +277,7 @@ class AIService {
         for (const provider of this.providers) {
             try {
                 console.log(`  - ${provider.name} API를 사용하여 콘텐츠 생성을 시도합니다...`);
-                const result = await provider.generate(provider.client, prompt);
+                const result = await provider.generate(provider.client, prompt, provider.requestOptions);
                 console.log(`  - ${provider.name} API 호출 성공!`);
                 return result;
             } catch (error) {
@@ -392,7 +394,7 @@ async function main() {
 
     const pinecone = new Pinecone();
     const aiService = new AIService(); // ✨ FIX: AI 서비스 클래스 인스턴스화
-    const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' }).getGenerativeModel({ model: "text-embedding-004" });
+    const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
     const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL,
         token: process.env.UPSTASH_REDIS_REST_TOKEN,
