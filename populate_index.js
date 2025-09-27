@@ -2,7 +2,6 @@ require('dotenv').config();
 const fetch = require('node-fetch');
 const { Pinecone } = require('@pinecone-database/pinecone');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GoogleGenerativeAI, Groq } = require('@google/generative-ai'); // Groq might not be needed here, but good for consistency
 
 // --- 설정 ---
 const INDEX_NAME = 'gcp-starter-gemini';
