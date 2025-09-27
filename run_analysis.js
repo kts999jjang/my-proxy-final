@@ -258,9 +258,26 @@ class AIService {
 
     async generateWithGemini(client, prompt) {
         // ✨ FIX: apiVersion 파라미터를 제거하여 라이브러리가 최적의 버전을 자동으로 선택하도록 합니다.
-        const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
-        const result = await model.generateContent(prompt);
-        return result.response.text();
+        const model = client.getGenerativeModel({ model: "gemini-pro" });
+        
+        let attempts = 0;
+        const maxAttempts = 3;
+        while (attempts < maxAttempts) {
+            try {
+                const result = await model.generateContent(prompt);
+                return result.response.text();
+            } catch (error) {
+                attempts++;
+                // 503 오류(서비스 일시적 사용 불가) 발생 시에만 재시도
+                if (error.status === 503 && attempts < maxAttempts) {
+                    console.warn(`  - Gemini API 일시적 오류(503). ${attempts * 2}초 후 재시도합니다...`);
+                    await sleep(2000 * attempts);
+                    continue;
+                }
+                // 그 외의 오류이거나 최대 재시도 횟수 도달 시, 오류를 다시 발생시켜 상위 로직에서 처리하도록 함
+                throw error;
+            }
+        }
     }
 
     async generateWithGroq(client, prompt) {
