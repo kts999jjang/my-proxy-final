@@ -30,13 +30,18 @@ async function getTickerForCompanyName(companyName, redis) {
     try {
         await sleep(1100); // Finnhub API 호출 제한 준수 (분당 60회)
         const response = await fetch(url);
+        // ✨ FIX: Finnhub API가 HTML 오류 페이지를 반환하는 경우를 처리합니다.
+        if (!response.headers.get('content-type')?.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`Finnhub API returned non-JSON response: ${text.substring(0, 100)}`);
+        }
         const data = await response.json();
 
         // Finnhub는 가장 관련성 높은 결과를 첫 번째로 반환합니다.
         const bestMatch = data?.result?.[0];
         if (bestMatch && !bestMatch.symbol.includes('.')) { // .이 포함된 티커(예: BRK.B)는 제외하여 단순화
             const ticker = bestMatch.symbol;
-            const companyName = bestMatch.description;
+            const companyName = bestMatch.description || ticker;
             // ✨ FIX: 티커와 회사명을 함께 객체로 캐싱
             const result = { ticker, companyName };
             await redis.set(cleanedName, JSON.stringify(result), { ex: 60 * 60 * 24 * 7 });
@@ -252,6 +257,7 @@ class AIService {
     }
 
     async generateWithGemini(client, prompt) {
+        // ✨ FIX: 라이브러리 명세에 따라 getGenerativeModel의 두 번째 인자로 apiVersion을 전달합니다.
         const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" }, { apiVersion: 'v1' });
         const result = await model.generateContent(prompt);
         return result.response.text();
@@ -275,7 +281,7 @@ class AIService {
         for (const provider of this.providers) {
             try {
                 console.log(`  - ${provider.name} API를 사용하여 콘텐츠 생성을 시도합니다...`);
-                const result = await provider.generate(provider.client, prompt, provider.requestOptions);
+                const result = await provider.generate(provider.client, prompt);
                 console.log(`  - ${provider.name} API 호출 성공!`);
                 return result;
             } catch (error) {
@@ -373,7 +379,7 @@ Provide the output ONLY in JSON format like this example:
                 '클라우드 & 데이터센터': { query: '("cloud computing" OR "data center") AND ("Amazon AWS" OR "Microsoft Azure")' },
                 '전기차 & 자율주행': { query: '("electric vehicle" OR "self-driving") AND (Tesla OR Rivian)' },
                 '바이오 & 헬스케어': { query: '("biotechnology" OR "pharmaceutical") AND (Moderna OR Pfizer)' },
-            }
+            },
         };
     }
 }
@@ -394,6 +400,7 @@ async function main() {
         apiKey: process.env.PINECONE_API_KEY,
     });
     const aiService = new AIService(); // ✨ FIX: AI 서비스 클래스 인스턴스화
+    // ✨ FIX: 라이브러리 명세에 따라 getGenerativeModel의 두 번째 인자로 apiVersion을 전달합니다.
     const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
     const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL,

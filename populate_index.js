@@ -25,6 +25,7 @@ async function main() {
   });
   const index = pinecone.index(INDEX_NAME);
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  // ✨ FIX: 라이브러리 명세에 따라 getGenerativeModel의 두 번째 인자로 apiVersion을 전달합니다.
   const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
   const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL,
