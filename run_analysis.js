@@ -425,11 +425,27 @@ async function main() {
             // 1. 테마 쿼리 자체를 직접 임베딩하여 관련 기사 검색 (요약 단계 삭제)
             console.log(`  - '${themeName}' 테마 쿼리를 임베딩하여 관련 기사를 검색합니다.`);
             const index = pinecone.index('gcp-starter-gemini');
-            const embeddingResult = await embeddingModel.embedContent({
-                content: { parts: [{ text: themeData.query }] },
-                taskType: "RETRIEVAL_QUERY",
-            });
-            const queryVector = embeddingResult.embedding.values;
+            
+            // ✨ FIX: 임베딩 API 호출 시 재시도 로직을 추가하여 안정성을 대폭 강화합니다.
+            let queryVector;
+            try {
+                let attempts = 0;
+                while (attempts < 3) {
+                    try {
+                        const embeddingResult = await embeddingModel.embedContent({ content: { parts: [{ text: themeData.query }] }, taskType: "RETRIEVAL_QUERY" });
+                        queryVector = embeddingResult.embedding.values;
+                        break; // 성공 시 루프 탈출
+                    } catch (e) {
+                        attempts++;
+                        if (attempts >= 3) throw e;
+                        console.warn(`  - 임베딩 API 호출 재시도 (${attempts}/3)...`);
+                        await sleep(2000 * attempts);
+                    }
+                }
+            } catch (e) {
+                console.error(`  - '${themeName}' 테마의 임베딩 변환에 최종적으로 실패했습니다. 이 테마를 건너뜁니다.`, e.message);
+                continue; // 다음 테마로 넘어감
+            }
 
             // 분석할 기사 수를 500개로 늘림
             const queryResult = await index.query({ 
