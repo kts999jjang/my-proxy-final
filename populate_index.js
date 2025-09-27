@@ -15,7 +15,9 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
   console.log(`데이터 준비 스크립트를 시작합니다... (지난 ${DAYS_TO_FETCH}일)`);
 
-  const pinecone = new Pinecone();
+  const pinecone = new Pinecone({
+    apiKey: process.env.PINECONE_API_KEY,
+  });
   const index = pinecone.index(INDEX_NAME);
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });

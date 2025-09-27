@@ -392,7 +392,9 @@ async function main() {
     const redisKey = `recommendations_${periodString}`; // 기간별 Redis 키 생성
     console.log(`분석 기간: ${daysToAnalyze}일, Redis 저장 키: ${redisKey}`);
 
-    const pinecone = new Pinecone();
+    const pinecone = new Pinecone({
+        apiKey: process.env.PINECONE_API_KEY,
+    });
     const aiService = new AIService(); // ✨ FIX: AI 서비스 클래스 인스턴스화
     const embeddingModel = new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
     const redis = new Redis({
