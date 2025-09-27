@@ -320,8 +320,8 @@ class AIService {
                 console.log(`  - ${provider.name} API 호출 성공!`);
                 return result;
             } catch (error) {
-                // 404(Not Found), 429 (Too Many Requests) 또는 5xx (Server Error)일 경우 다음 프로바이더로 넘어감
-                if (error.status === 404 || error.status === 429 || (error.status >= 500 && error.status < 600)) {
+                // 400(잘못된 요청), 404(찾을 수 없음), 429(요청 초과) 또는 5xx(서버 오류)일 경우 다음 프로바이더로 넘어감
+                if (error.status === 400 || error.status === 404 || error.status === 429 || (error.status >= 500 && error.status < 600)) {
                     console.warn(`  - ${provider.name} API 오류 발생 (Status: ${error.status}). 다음 API로 넘어갑니다...`);
                     continue;
                 }
