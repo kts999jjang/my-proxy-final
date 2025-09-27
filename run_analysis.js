@@ -238,7 +238,7 @@ class AIService {
         if (process.env.GEMINI_API_KEY) {
             this.providers.push({
                 name: 'Gemini',
-                client: new GoogleGenerativeAI(process.env.GEMINI_API_KEY),
+                client: new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' }),
                 generate: this.generateWithGemini,
             });
         }
@@ -260,7 +260,7 @@ class AIService {
     async generateWithGroq(client, prompt) {
         const chatCompletion = await client.chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
-            model: 'mixtral-8x7b-32768', // ✨ FIX: 지원이 중단된 모델을 현재 사용 가능한 모델로 변경합니다.
+            model: 'gemma2-9b-it', // ✨ FIX: 현재 사용 가능한 최신 모델로 변경합니다.
             temperature: 0.3,
             response_format: { type: "json_object" },
         });

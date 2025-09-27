@@ -53,7 +53,7 @@ async function main() {
 
     try {
         // ✨ FIX: 특정 키워드 대신, 광범위한 주제의 뉴스를 수집하여 데이터 편향을 최소화합니다.
-        const gnewsUrl = `https://gnews.io/api/v4/top-headlines?topic=business,technology&lang=en&max=100&from=${from.toISOString()}&to=${to.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
+        const gnewsUrl = `https://gnews.io/api/v4/search?q="market OR stock"&topic=business,technology&lang=en&max=100&from=${from.toISOString()}&to=${to.toISOString()}&apikey=${process.env.GNEWS_API_KEY}`;
         
         // ✨ FIX: GNews API 호출 시 타임아웃 및 재시도 로직을 추가하여 안정성을 높입니다.
         let response;
