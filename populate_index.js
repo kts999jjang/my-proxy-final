@@ -17,7 +17,7 @@ async function main() {
 
   const pinecone = new Pinecone();
   const index = pinecone.index(INDEX_NAME);
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' });
   const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
   const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL,
@@ -87,12 +87,24 @@ async function main() {
   let vectors = [];
   for (const article of uniqueArticles) {
     try {
-      // ✨ FIX: run_analysis.js와 동일한 임베딩 모델 및 taskType을 사용하여 차원 불일치 문제를 해결합니다.
-      const embeddingResult = await embeddingModel.embedContent({ content: { parts: [{ text: article.title }] }, taskType: "RETRIEVAL_DOCUMENT" });
-      const vector = embeddingResult.embedding.values;
-      
-      const publishedAtTimestamp = Math.floor(new Date(article.publishedAt).getTime() / 1000);
+      let embeddingResult;
+      let attempts = 0;
+      const maxAttempts = 3;
+      while (attempts < maxAttempts) {
+        try {
+          embeddingResult = await embeddingModel.embedContent(
+            { content: { parts: [{ text: article.title }] }, taskType: "RETRIEVAL_DOCUMENT" }
+          );
+          break; // 성공 시 루프 탈출
+        } catch (e) {
+          attempts++;
+          if (attempts >= maxAttempts) throw e; // 최대 시도 횟수 초과 시 오류 발생
+          console.warn(`'${article.title}' 임베딩 재시도 (${attempts}/${maxAttempts})...`);
+          await sleep(2000 * attempts); // 재시도 간격 증가
+        }
+      }
 
+      const vector = embeddingResult.embedding.values;
       vectors.push({
         id: article.url,
         values: vector,
@@ -100,15 +112,12 @@ async function main() {
           title: article.title,
           source: article.source.name,
           url: article.url,
-          publishedAt: publishedAtTimestamp,
+          publishedAt: Math.floor(new Date(article.publishedAt).getTime() / 1000),
         },
       });
       
-      await sleep(1100); // 분당 요청 제한을 피하기 위한 지연
-
     } catch (e) {
       console.error(`'${article.title}' 임베딩 변환 중 오류:`, e.message);
-      await sleep(5000);
     }
     if (vectors.length % 10 === 0) {
         console.log(`  - ${vectors.length} / ${uniqueArticles.length}개 변환 완료...`);
