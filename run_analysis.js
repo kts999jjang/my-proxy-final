@@ -257,8 +257,8 @@ class AIService {
     }
 
     async generateWithGemini(client, prompt) {
-        // ✨ FIX: 라이브러리 명세에 따라 getGenerativeModel의 두 번째 인자로 apiVersion을 전달합니다.
-        const model = client.getGenerativeModel({ model: "gemini-pro" }, { apiVersion: 'v1' });
+        // ✨ FIX: apiVersion 파라미터를 제거하여 라이브러리가 최적의 버전을 자동으로 선택하도록 합니다.
+        const model = client.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
         const result = await model.generateContent(prompt);
         return result.response.text();
     }
